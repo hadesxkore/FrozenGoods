@@ -7,5 +7,6 @@
   ],
   "buildCommand": "cd frozengoods && npm install && npm run build",
   "outputDirectory": "frozengoods/dist",
-  "framework": "vite"
+  "framework": "vite",
+  "installCommand": "cd frozengoods && npm install"
 } 
