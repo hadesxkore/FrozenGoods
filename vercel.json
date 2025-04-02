@@ -5,7 +5,7 @@
       "destination": "/index.html"
     }
   ],
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
+  "buildCommand": "cd frozengoods && npm install && npm run build",
+  "outputDirectory": "frozengoods/dist",
   "framework": "vite"
 } 
