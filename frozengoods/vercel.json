@@ -5,8 +5,8 @@
       "destination": "/index.html"
     }
   ],
-  "buildCommand": "cd frozengoods && npm install && npm run build",
+  "buildCommand": "cd frozengoods && npm install --legacy-peer-deps && npm run build",
   "outputDirectory": "frozengoods/dist",
   "framework": "vite",
-  "installCommand": "cd frozengoods && npm install"
+  "installCommand": "cd frozengoods && npm install --legacy-peer-deps"
 } 
