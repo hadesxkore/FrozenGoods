@@ -19,7 +19,17 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  CardFooter,
 } from "@/components/ui/card";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -74,6 +84,8 @@ export default function Reservations() {
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
   const [currentReservation, setCurrentReservation] = useState(null);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("Cash");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 9; // Show 7 transactions per page
   const { currentUser } = useAuth();
 
   // Payment method options
@@ -112,11 +124,119 @@ export default function Reservations() {
     fetchReservations();
   }, []);
 
+  // Reset pagination when search term changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
   // Filter reservations based on search term
   const filteredReservations = reservations.filter(reservation => 
     reservation.productName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     reservation.customerName?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Apply pagination
+  const paginatedReservations = filteredReservations.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  // Calculate total pages
+  const totalPages = Math.ceil(filteredReservations.length / itemsPerPage);
+
+  // Calculate total amount of all filtered reservations
+  const totalAmount = filteredReservations.reduce(
+    (sum, reservation) => sum + (reservation.amount || 0), 
+    0
+  );
+
+  // Handle page change
+  const handlePageChange = (page) => {
+    setCurrentPage(page);
+  };
+
+  // Generate pagination items
+  const renderPaginationItems = () => {
+    const items = [];
+    const maxVisiblePages = 5; // Maximum number of page links to show
+    
+    if (totalPages <= maxVisiblePages) {
+      // Show all pages if less than maxVisiblePages
+      for (let i = 1; i <= totalPages; i++) {
+        items.push(
+          <PaginationItem key={i}>
+            <PaginationLink 
+              onClick={() => handlePageChange(i)}
+              isActive={currentPage === i}
+            >
+              {i}
+            </PaginationLink>
+          </PaginationItem>
+        );
+      }
+    } else {
+      // Show first page
+      items.push(
+        <PaginationItem key={1}>
+          <PaginationLink 
+            onClick={() => handlePageChange(1)}
+            isActive={currentPage === 1}
+          >
+            1
+          </PaginationLink>
+        </PaginationItem>
+      );
+      
+      // Add ellipsis if needed
+      if (currentPage > 3) {
+        items.push(
+          <PaginationItem key="ellipsis-start">
+            <PaginationEllipsis />
+          </PaginationItem>
+        );
+      }
+      
+      // Add current page and adjacent pages
+      const startPage = Math.max(2, currentPage - 1);
+      const endPage = Math.min(totalPages - 1, currentPage + 1);
+      
+      for (let i = startPage; i <= endPage; i++) {
+        items.push(
+          <PaginationItem key={i}>
+            <PaginationLink 
+              onClick={() => handlePageChange(i)}
+              isActive={currentPage === i}
+            >
+              {i}
+            </PaginationLink>
+          </PaginationItem>
+        );
+      }
+      
+      // Add ellipsis if needed
+      if (currentPage < totalPages - 2) {
+        items.push(
+          <PaginationItem key="ellipsis-end">
+            <PaginationEllipsis />
+          </PaginationItem>
+        );
+      }
+      
+      // Show last page
+      items.push(
+        <PaginationItem key={totalPages}>
+          <PaginationLink 
+            onClick={() => handlePageChange(totalPages)}
+            isActive={currentPage === totalPages}
+          >
+            {totalPages}
+          </PaginationLink>
+        </PaginationItem>
+      );
+    }
+    
+    return items;
+  };
 
   // Open payment method dialog
   const openPaymentDialog = (reservation) => {
@@ -255,7 +375,7 @@ export default function Reservations() {
         </div>
       </div>
       
-      <Card>
+      <Card className="border rounded-md">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div>
@@ -296,7 +416,7 @@ export default function Reservations() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredReservations.map((reservation) => (
+                  {paginatedReservations.map((reservation) => (
                     <TableRow key={reservation.id}>
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
@@ -367,6 +487,36 @@ export default function Reservations() {
             </div>
           )}
         </CardContent>
+        {filteredReservations.length > 0 && (
+          <CardFooter className="border-t flex items-center justify-between px-6 py-4">
+            <div className="text-sm font-medium">
+              Total Reserved Amount: <span className="text-green-600">₱{totalAmount.toFixed(2)}</span>
+              <span className="text-muted-foreground ml-2 text-xs">
+                ({filteredReservations.length} {filteredReservations.length === 1 ? 'reservation' : 'reservations'})
+              </span>
+            </div>
+            
+            {totalPages > 1 && (
+              <Pagination>
+                <PaginationContent>
+                  {currentPage > 1 && (
+                    <PaginationItem>
+                      <PaginationPrevious onClick={() => handlePageChange(currentPage - 1)} />
+                    </PaginationItem>
+                  )}
+                  
+                  {renderPaginationItems()}
+                  
+                  {currentPage < totalPages && (
+                    <PaginationItem>
+                      <PaginationNext onClick={() => handlePageChange(currentPage + 1)} />
+                    </PaginationItem>
+                  )}
+                </PaginationContent>
+              </Pagination>
+            )}
+          </CardFooter>
+        )}
       </Card>
 
       {/* Payment Method Dialog */}
