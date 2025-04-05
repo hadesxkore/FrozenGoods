@@ -632,7 +632,16 @@ export default function Transactions() {
   };
 
   const handlePrintSales = () => {
+    // Show preparing notification
+    toast.info('Preparing sales report for export...');
+    
     const printWindow = window.open('', '_blank');
+    
+    if (!printWindow) {
+      toast.error('Please allow popups for this site to print sales report');
+      return;
+    }
+    
     const currentDate = format(new Date(), 'MMMM d, yyyy');
     
     // Calculate total sales amount
@@ -760,7 +769,14 @@ export default function Transactions() {
     
     setTimeout(() => {
       printWindow.print();
-      printWindow.close();
+      
+      // Close the window after printing (or after a delay if user cancels)
+      setTimeout(() => {
+        if (!printWindow.closed) {
+          printWindow.close();
+        }
+        toast.success('Sales report exported successfully!');
+      }, 1000);
     }, 500);
   };
 

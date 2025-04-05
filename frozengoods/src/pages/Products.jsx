@@ -580,8 +580,17 @@ export default function Products() {
   }, [searchTerm, categoryFilter]);
 
   const handleExportPDF = () => {
+    // Show preparing notification
+    toast.info('Preparing inventory data for export...');
+    
     // Create a new window for printing
     const printWindow = window.open('', '_blank');
+    
+    if (!printWindow) {
+      toast.error('Please allow popups for this site to export PDF');
+      return;
+    }
+    
     const currentDate = format(new Date(), 'MMMM d, yyyy');
     
     printWindow.document.write(`
@@ -695,7 +704,14 @@ export default function Products() {
     // Wait for the content to load before printing
     setTimeout(() => {
       printWindow.print();
-      printWindow.close();
+      
+      // Close the window after printing (or after a delay if user cancels)
+      setTimeout(() => {
+        if (!printWindow.closed) {
+          printWindow.close();
+        }
+        toast.success('Inventory report exported successfully!');
+      }, 1000);
     }, 500);
   };
 
