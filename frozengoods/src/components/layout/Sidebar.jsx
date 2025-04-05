@@ -15,7 +15,8 @@ import {
   Menu,
   X,
   ChevronRight,
-  Snowflake
+  Snowflake,
+  BookmarkIcon
 } from "lucide-react";
 
 export default function Sidebar({ onStateChange }) {
@@ -83,6 +84,11 @@ export default function Sidebar({ onStateChange }) {
       title: "Transactions",
       icon: <ShoppingCart className="h-5 w-5" />,
       path: "/transactions",
+    },
+    {
+      title: "Reservations",
+      icon: <BookmarkIcon className="h-5 w-5" />,
+      path: "/reservations",
     },
     {
       title: "Reports",

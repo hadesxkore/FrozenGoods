@@ -53,7 +53,9 @@ import {
   DialogHeader, 
   DialogTitle, 
   DialogFooter,
-  DialogDescription
+  DialogDescription,
+  DialogTrigger,
+  DialogClose
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { 
@@ -70,7 +72,10 @@ import {
   ShoppingBag,
   Filter,
   Printer,
-  FileDown
+  FileDown,
+  ArrowUpDown,
+  Calendar,
+  BookmarkIcon
 } from "lucide-react";
 import { uploadImageToCloudinary } from "@/utils/cloudinary";
 import { format } from "date-fns";
@@ -99,7 +104,12 @@ export default function Products() {
   const [currentProductId, setCurrentProductId] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isReserveDialogOpen, setIsReserveDialogOpen] = useState(false);
+  const [productToEdit, setProductToEdit] = useState(null);
   const [productToDelete, setProductToDelete] = useState(null);
+  const [productToReserve, setProductToReserve] = useState(null);
+  const [reserveQuantity, setReserveQuantity] = useState("1");
+  const [customerName, setCustomerName] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -261,6 +271,14 @@ export default function Products() {
     setIsDeleteDialogOpen(true);
   };
 
+  // Open reserve dialog
+  const openReserveDialog = (product) => {
+    setProductToReserve(product);
+    setReserveQuantity("1");
+    setCustomerName("");
+    setIsReserveDialogOpen(true);
+  };
+
   // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -377,6 +395,73 @@ export default function Products() {
       toast.error("Failed to delete product");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Handle reservation submission
+  const handleReserveProduct = async () => {
+    try {
+      if (!productToReserve) return;
+      
+      // Validate reservation quantity
+      const quantity = parseInt(reserveQuantity);
+      if (isNaN(quantity) || quantity <= 0) {
+        toast.error("Please enter a valid quantity");
+        return;
+      }
+      
+      if (quantity > productToReserve.quantity) {
+        toast.error("Quantity exceeds available stock");
+        return;
+      }
+      
+      // Calculate total amount
+      const amount = productToReserve.price * quantity;
+      
+      // Create reservation in Firestore
+      const reservationRef = await addDoc(collection(db, "reservations"), {
+        productId: productToReserve.id,
+        productName: productToReserve.productName || productToReserve.name,
+        quantity,
+        amount,
+        customerName: customerName.trim() || "Walk-in Customer",
+        createdAt: new Date(),
+        userId: currentUser.uid,
+        userName: currentUser.displayName || currentUser.email,
+      });
+      
+      // Update product quantity in the inventory
+      const productRef = doc(db, "products", productToReserve.id);
+      const newQuantity = productToReserve.quantity - quantity;
+      
+      await updateDoc(productRef, {
+        quantity: newQuantity
+      });
+      
+      // Add inventory transaction
+      await addDoc(collection(db, "transactions"), {
+        type: "inventory_adjustment",
+        productId: productToReserve.id,
+        productName: productToReserve.productName || productToReserve.name,
+        quantity: -quantity,
+        date: new Date(),
+        notes: `Reserved ${quantity} units for ${customerName.trim() || "Walk-in Customer"} (Reservation ID: ${reservationRef.id.slice(0, 8)})`,
+        userId: currentUser.uid,
+        userName: currentUser.displayName || currentUser.email,
+        reservationId: reservationRef.id
+      });
+      
+      // Update the local products state
+      setProducts(prevProducts => prevProducts.map(p => 
+        p.id === productToReserve.id ? { ...p, quantity: newQuantity } : p
+      ));
+      
+      // Close dialog and show success message
+      setIsReserveDialogOpen(false);
+      toast.success("Product reserved successfully");
+    } catch (error) {
+      console.error("Error reserving product:", error);
+      toast.error("Failed to reserve product");
     }
   };
 
@@ -762,6 +847,16 @@ export default function Products() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           <Button 
+                            variant="outline" 
+                            size="sm"
+                            className="flex items-center gap-1"
+                            onClick={() => openReserveDialog(product)}
+                            disabled={product.quantity <= 0}
+                          >
+                            <BookmarkIcon className="h-3 w-3" />
+                            <span>Reserve</span>
+                          </Button>
+                          <Button 
                             variant="ghost" 
                             size="icon"
                             onClick={() => openEditDialog(product)}
@@ -990,6 +1085,77 @@ export default function Products() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      
+      {/* Reserve Product Dialog */}
+      <Dialog open={isReserveDialogOpen} onOpenChange={setIsReserveDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Reserve Product</DialogTitle>
+            <DialogDescription>
+              Create a reservation for this product.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4">
+            <div className="flex flex-col space-y-1.5">
+              <Label htmlFor="product-name">Product</Label>
+              <Input
+                id="product-name"
+                value={productToReserve?.name || ""}
+                disabled
+                className="bg-muted"
+              />
+            </div>
+            
+            <div className="flex flex-col space-y-1.5">
+              <Label htmlFor="customer-name">Customer Name</Label>
+              <Input
+                id="customer-name"
+                placeholder="Enter customer name"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+              />
+            </div>
+            
+            <div className="flex flex-col space-y-1.5">
+              <Label htmlFor="quantity">Quantity</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="quantity"
+                  type="number"
+                  placeholder="Enter quantity"
+                  value={reserveQuantity}
+                  onChange={(e) => setReserveQuantity(e.target.value)}
+                  min="1"
+                  max={productToReserve?.quantity}
+                />
+                <Badge variant="outline" className="flex-shrink-0">
+                  In stock: {productToReserve?.quantity || 0}
+                </Badge>
+              </div>
+            </div>
+            
+            {productToReserve && (
+              <div className="flex flex-col space-y-1.5">
+                <Label>Total Amount</Label>
+                <div className="p-2 border rounded-md bg-muted/50 font-medium">
+                  ₱{((productToReserve?.price || 0) * (parseInt(reserveQuantity) || 0)).toFixed(2)}
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setIsReserveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleReserveProduct}>
+              <BookmarkIcon className="mr-2 h-4 w-4" />
+              Reserve Now
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 
