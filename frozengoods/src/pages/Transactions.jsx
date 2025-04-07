@@ -130,12 +130,23 @@ export default function Transactions() {
   const [notes, setNotes] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [paymentMethodFilter, setPaymentMethodFilter] = useState("all");
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState("all");
+  const [isEditStatusDialogOpen, setIsEditStatusDialogOpen] = useState(false);
+  const [transactionToEdit, setTransactionToEdit] = useState(null);
+  const [partialAmount, setPartialAmount] = useState("");
 
   // Payment method options
   const PAYMENT_METHODS = {
     CASH: "Cash",
     GCASH: "GCash",
     PAYMAYA: "PayMaya"
+  };
+
+  // Payment status options
+  const PAYMENT_STATUS = {
+    PAID: "Paid",
+    UNPAID: "Unpaid",
+    PARTIAL: "Partially Paid"
   };
 
   // Fetch transactions and products
@@ -292,6 +303,7 @@ export default function Transactions() {
         quantity: quantityNum,
         amount: selectedProduct.price * quantityNum,
         paymentMethod: paymentMethod,
+        paymentStatus: PAYMENT_STATUS.PAID, // Default to paid for new transactions
         notes: notes,
         userName: currentUser?.name || currentUser?.email || "Unknown User",
         userId: currentUser?.uid || "unknown",
@@ -494,11 +506,48 @@ export default function Transactions() {
     return transactions.filter(transaction => transaction.paymentMethod === paymentMethodFilter);
   };
 
+  // Filter transactions by payment status
+  const filterTransactionsByPaymentStatus = (transactions) => {
+    if (paymentStatusFilter === "all") return transactions;
+    return transactions.filter(transaction => transaction.paymentStatus === paymentStatusFilter);
+  };
+
   // Update the filtered sales transactions
   const filteredSalesTransactions = filterTransactions(
-    filterTransactionsByPayment(salesTransactions),
+    filterTransactionsByPaymentStatus(
+      filterTransactionsByPayment(salesTransactions)
+    ),
     searchTerm,
     salesFilterType
+  );
+
+  // Calculate totals for paid and unpaid transactions
+  const paidTransactions = filteredSalesTransactions.filter(
+    transaction => transaction.paymentStatus === PAYMENT_STATUS.PAID
+  );
+  const partiallyPaidTransactions = filteredSalesTransactions.filter(
+    transaction => transaction.paymentStatus === PAYMENT_STATUS.PARTIAL
+  );
+  const unpaidTransactions = filteredSalesTransactions.filter(
+    transaction => transaction.paymentStatus === PAYMENT_STATUS.UNPAID || !transaction.paymentStatus
+  );
+  
+  const paidTotal = paidTransactions.reduce((sum, transaction) => 
+    sum + (transaction.amount || 0), 0
+  );
+  
+  // Calculate total paid amount including partial payments
+  const partialPaidTotal = partiallyPaidTransactions.reduce((sum, transaction) => 
+    sum + (transaction.partialAmount || 0), 0
+  );
+  
+  const totalPaidAmount = paidTotal + partialPaidTotal;
+  
+  const unpaidTotal = unpaidTransactions.reduce((sum, transaction) => 
+    sum + (transaction.amount || 0), 0
+  );
+  const overallTotal = filteredSalesTransactions.reduce((sum, transaction) => 
+    sum + (transaction.amount || 0), 0
   );
 
   // Update the filtered inventory transactions
@@ -780,6 +829,71 @@ export default function Transactions() {
     }, 500);
   };
 
+  // Handle updating payment status
+  const handleUpdatePaymentStatus = async (transaction, newStatus, partialAmount = null) => {
+    try {
+      setLoading(true);
+      
+      // Store the original amount if not already stored
+      let originalAmount = transaction.originalAmount || transaction.amount;
+      
+      if (newStatus === PAYMENT_STATUS.PARTIAL && partialAmount !== null) {
+        // Store the original amount if not already stored
+        if (!transaction.originalAmount) {
+          originalAmount = transaction.amount;
+        }
+        
+        // Update transaction in Firestore with status and partial payment info
+        const transactionRef = doc(db, "transactions", transaction.id);
+        await updateDoc(transactionRef, {
+          paymentStatus: newStatus,
+          originalAmount: originalAmount,
+          partialAmount: partialAmount
+        });
+        
+        // Update local state
+        setTransactions(prev => prev.map(t => 
+          t.id === transaction.id 
+            ? { 
+                ...t, 
+                paymentStatus: newStatus, 
+                originalAmount: originalAmount,
+                partialAmount: partialAmount
+              } 
+            : t
+        ));
+      } else {
+        // Just update the payment status
+        const transactionRef = doc(db, "transactions", transaction.id);
+        await updateDoc(transactionRef, {
+          paymentStatus: newStatus
+        });
+        
+        // Update local state
+        setTransactions(prev => prev.map(t => 
+          t.id === transaction.id 
+            ? { ...t, paymentStatus: newStatus } 
+            : t
+        ));
+      }
+      
+      toast.success(`Payment status updated to ${newStatus}`);
+      setIsEditStatusDialogOpen(false);
+      setTransactionToEdit(null);
+    } catch (error) {
+      console.error("Error updating payment status:", error);
+      toast.error("Failed to update payment status");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Open edit payment status dialog
+  const openEditStatusDialog = (transaction) => {
+    setTransactionToEdit(transaction);
+    setIsEditStatusDialogOpen(true);
+  };
+
   // Render sales transactions table
   const renderSalesTable = () => {
     return (
@@ -809,6 +923,20 @@ export default function Transactions() {
                 <SelectItem value={PAYMENT_METHODS.CASH}>Cash</SelectItem>
                 <SelectItem value={PAYMENT_METHODS.GCASH}>GCash</SelectItem>
                 <SelectItem value={PAYMENT_METHODS.PAYMAYA}>PayMaya</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={paymentStatusFilter}
+              onValueChange={setPaymentStatusFilter}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Filter by status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value={PAYMENT_STATUS.PAID}>Paid</SelectItem>
+                <SelectItem value={PAYMENT_STATUS.PARTIAL}>Partially Paid</SelectItem>
+                <SelectItem value={PAYMENT_STATUS.UNPAID}>Unpaid</SelectItem>
               </SelectContent>
             </Select>
             <Button variant="outline" onClick={handlePrintSales}>
@@ -930,9 +1058,9 @@ export default function Transactions() {
                         <SelectValue placeholder="Select payment method" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={PAYMENT_METHODS.CASH}>Cash</SelectItem>
-                        <SelectItem value={PAYMENT_METHODS.GCASH}>GCash</SelectItem>
-                        <SelectItem value={PAYMENT_METHODS.PAYMAYA}>PayMaya</SelectItem>
+                        <SelectItem value={PAYMENT_METHODS.CASH} className="text-gray-800">Cash</SelectItem>
+                        <SelectItem value={PAYMENT_METHODS.GCASH} className="text-blue-800">GCash</SelectItem>
+                        <SelectItem value={PAYMENT_METHODS.PAYMAYA} className="text-green-800">PayMaya</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -978,6 +1106,7 @@ export default function Transactions() {
                   <TableHead>Product</TableHead>
                   <TableHead>User</TableHead>
                   <TableHead>Payment Method</TableHead>
+                  <TableHead>Payment Status</TableHead>
                   <TableHead>Quantity</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Notes</TableHead>
@@ -1009,6 +1138,7 @@ export default function Transactions() {
                   <TableHead>Product</TableHead>
                   <TableHead>User</TableHead>
                   <TableHead>Payment Method</TableHead>
+                  <TableHead>Payment Status</TableHead>
                   <TableHead>Quantity</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Notes</TableHead>
@@ -1039,9 +1169,41 @@ export default function Transactions() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">
+                      <Badge 
+                        variant="secondary" 
+                        className={
+                          transaction.paymentMethod === PAYMENT_METHODS.GCASH 
+                            ? "bg-blue-100 text-blue-800 hover:bg-blue-200" 
+                            : transaction.paymentMethod === PAYMENT_METHODS.PAYMAYA
+                              ? "bg-green-100 text-green-800 hover:bg-green-200"
+                              : transaction.paymentMethod === PAYMENT_METHODS.CASH
+                                ? "bg-gray-100 text-gray-800 hover:bg-gray-200"
+                                : ""
+                        }
+                      >
                         {transaction.paymentMethod || "Unspecified"}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Button 
+                        variant={
+                          transaction.paymentStatus === PAYMENT_STATUS.PAID 
+                            ? "outline" 
+                            : transaction.paymentStatus === PAYMENT_STATUS.PARTIAL
+                              ? "secondary"
+                              : "destructive"
+                        }
+                        size="sm"
+                        className="w-full"
+                        onClick={() => openEditStatusDialog(transaction)}
+                      >
+                        {transaction.paymentStatus || PAYMENT_STATUS.UNPAID}
+                        {transaction.paymentStatus === PAYMENT_STATUS.PARTIAL && transaction.partialAmount && (
+                          <span className="ml-1 text-xs">
+                            (₱{transaction.partialAmount.toFixed(2)} paid, ₱{(transaction.originalAmount - transaction.partialAmount).toFixed(2)} remaining)
+                          </span>
+                        )}
+                      </Button>
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="font-normal">
@@ -1075,28 +1237,37 @@ export default function Transactions() {
                 ))}
               </TableBody>
             </Table>
-            <CardFooter className="flex items-center justify-between px-6 py-4">
-              <div className="text-sm text-muted-foreground">
-                Showing {((salesCurrentPage - 1) * itemsPerPage) + 1} to {Math.min(salesCurrentPage * itemsPerPage, filteredSalesTransactions.length)} of {filteredSalesTransactions.length} transactions
+            <CardFooter className="flex flex-col gap-4 px-6 py-4">
+              <div className="flex items-center justify-between w-full">
+                <div className="text-sm text-muted-foreground">
+                  Showing {((salesCurrentPage - 1) * itemsPerPage) + 1} to {Math.min(salesCurrentPage * itemsPerPage, filteredSalesTransactions.length)} of {filteredSalesTransactions.length} transactions
+                </div>
+                <div className="text-sm font-medium">
+                  <span className="text-muted-foreground mr-2">Total:</span>
+                  <span className="text-green-600">₱{overallTotal.toFixed(2)}</span>
+                </div>
               </div>
+              
               {salesTotalPages > 1 && (
-                <Pagination>
-                  <PaginationContent>
-                    {salesCurrentPage > 1 && (
-                      <PaginationItem>
-                        <PaginationPrevious onClick={() => handleSalesPageChange(salesCurrentPage - 1)} />
-                      </PaginationItem>
-                    )}
-                    
-                    {renderPaginationItems(salesCurrentPage, salesTotalPages, handleSalesPageChange)}
-                    
-                    {salesCurrentPage < salesTotalPages && (
-                      <PaginationItem>
-                        <PaginationNext onClick={() => handleSalesPageChange(salesCurrentPage + 1)} />
-                      </PaginationItem>
-                    )}
-                  </PaginationContent>
-                </Pagination>
+                <div className="flex justify-center w-full">
+                  <Pagination>
+                    <PaginationContent>
+                      {salesCurrentPage > 1 && (
+                        <PaginationItem>
+                          <PaginationPrevious onClick={() => handleSalesPageChange(salesCurrentPage - 1)} />
+                        </PaginationItem>
+                      )}
+                      
+                      {renderPaginationItems(salesCurrentPage, salesTotalPages, handleSalesPageChange)}
+                      
+                      {salesCurrentPage < salesTotalPages && (
+                        <PaginationItem>
+                          <PaginationNext onClick={() => handleSalesPageChange(salesCurrentPage + 1)} />
+                        </PaginationItem>
+                      )}
+                    </PaginationContent>
+                  </Pagination>
+                </div>
               )}
             </CardFooter>
           </div>
@@ -1257,28 +1428,33 @@ export default function Transactions() {
                 </Table>
               </div>
               <div className="border-t mt-auto">
-                <div className="flex items-center justify-between px-6 py-4">
-                  <div className="text-sm text-muted-foreground">
-                    Showing {((inventoryCurrentPage - 1) * itemsPerPage) + 1} to {Math.min(inventoryCurrentPage * itemsPerPage, filteredInventoryTransactions.length)} of {filteredInventoryTransactions.length} transactions
+                <div className="flex flex-col gap-4 px-6 py-4">
+                  <div className="flex items-center justify-between w-full">
+                    <div className="text-sm text-muted-foreground">
+                      Showing {((inventoryCurrentPage - 1) * itemsPerPage) + 1} to {Math.min(inventoryCurrentPage * itemsPerPage, filteredInventoryTransactions.length)} of {filteredInventoryTransactions.length} transactions
+                    </div>
                   </div>
+                  
                   {inventoryTotalPages > 1 && (
-                    <Pagination>
-                      <PaginationContent>
-                        {inventoryCurrentPage > 1 && (
-                          <PaginationItem>
-                            <PaginationPrevious onClick={() => handleInventoryPageChange(inventoryCurrentPage - 1)} />
-                          </PaginationItem>
-                        )}
-                        
-                        {renderPaginationItems(inventoryCurrentPage, inventoryTotalPages, handleInventoryPageChange)}
-                        
-                        {inventoryCurrentPage < inventoryTotalPages && (
-                          <PaginationItem>
-                            <PaginationNext onClick={() => handleInventoryPageChange(inventoryCurrentPage + 1)} />
-                          </PaginationItem>
-                        )}
-                      </PaginationContent>
-                    </Pagination>
+                    <div className="flex justify-center w-full">
+                      <Pagination>
+                        <PaginationContent>
+                          {inventoryCurrentPage > 1 && (
+                            <PaginationItem>
+                              <PaginationPrevious onClick={() => handleInventoryPageChange(inventoryCurrentPage - 1)} />
+                            </PaginationItem>
+                          )}
+                          
+                          {renderPaginationItems(inventoryCurrentPage, inventoryTotalPages, handleInventoryPageChange)}
+                          
+                          {inventoryCurrentPage < inventoryTotalPages && (
+                            <PaginationItem>
+                              <PaginationNext onClick={() => handleInventoryPageChange(inventoryCurrentPage + 1)} />
+                            </PaginationItem>
+                          )}
+                        </PaginationContent>
+                      </Pagination>
+                    </div>
                   )}
                 </div>
               </div>
@@ -1343,10 +1519,26 @@ export default function Transactions() {
         <TabsContent value={TRANSACTION_GROUPS.SALES} className="pt-4 pb-2">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle>Sales History</CardTitle>
-              <CardDescription>
-                View and manage all sales transactions
-              </CardDescription>
+              <div className="flex justify-between items-center">
+                <div>
+                  <CardTitle>Sales History</CardTitle>
+                  <CardDescription>
+                    View and manage all sales transactions
+                  </CardDescription>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                      <DollarSign className="h-3 w-3 mr-1" />
+                      Paid: ₱{totalPaidAmount.toFixed(2)}
+                    </Badge>
+                    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+                      <DollarSign className="h-3 w-3 mr-1" />
+                      Unpaid: ₱{unpaidTotal.toFixed(2)}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               {renderSalesTable()}
@@ -1406,6 +1598,117 @@ export default function Transactions() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edit Payment Status Dialog */}
+      <Dialog open={isEditStatusDialogOpen} onOpenChange={setIsEditStatusDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Update Payment Status</DialogTitle>
+            <DialogDescription>
+              Change the payment status for this transaction.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {transactionToEdit && (
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Product</Label>
+                  <div className="p-2 border rounded-md bg-muted/50">
+                    {transactionToEdit.productName}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Amount</Label>
+                  <div className="p-2 border rounded-md bg-muted/50">
+                    ₱{transactionToEdit.amount?.toFixed(2) || "0.00"}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Current Status</Label>
+                <div className="p-2 border rounded-md bg-muted/50">
+                  {transactionToEdit.paymentStatus || PAYMENT_STATUS.UNPAID}
+                  {transactionToEdit.paymentStatus === PAYMENT_STATUS.PARTIAL && transactionToEdit.partialAmount && (
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      (₱{transactionToEdit.partialAmount.toFixed(2)} paid, ₱{(transactionToEdit.originalAmount - transactionToEdit.partialAmount).toFixed(2)} remaining)
+                    </span>
+                  )}
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>New Status</Label>
+                <div className="flex gap-2">
+                  <Button 
+                    variant={transactionToEdit.paymentStatus === PAYMENT_STATUS.PAID ? "default" : "outline"}
+                    className="flex-1"
+                    onClick={() => handleUpdatePaymentStatus(transactionToEdit, PAYMENT_STATUS.PAID)}
+                    disabled={loading || transactionToEdit.paymentStatus === PAYMENT_STATUS.PAID}
+                  >
+                    Paid
+                  </Button>
+                  <Button 
+                    variant={transactionToEdit.paymentStatus === PAYMENT_STATUS.PARTIAL ? "secondary" : "outline"}
+                    className="flex-1"
+                    onClick={() => {
+                      if (partialAmount && !isNaN(partialAmount) && parseFloat(partialAmount) > 0) {
+                        handleUpdatePaymentStatus(
+                          transactionToEdit, 
+                          PAYMENT_STATUS.PARTIAL, 
+                          parseFloat(partialAmount)
+                        );
+                      } else {
+                        toast.error("Please enter a valid partial payment amount");
+                      }
+                    }}
+                    disabled={loading || transactionToEdit.paymentStatus === PAYMENT_STATUS.PARTIAL}
+                  >
+                    Partially Paid
+                  </Button>
+                  <Button 
+                    variant={transactionToEdit.paymentStatus === PAYMENT_STATUS.UNPAID ? "destructive" : "outline"}
+                    className="flex-1"
+                    onClick={() => handleUpdatePaymentStatus(transactionToEdit, PAYMENT_STATUS.UNPAID)}
+                    disabled={loading || transactionToEdit.paymentStatus === PAYMENT_STATUS.UNPAID}
+                  >
+                    Unpaid
+                  </Button>
+                </div>
+              </div>
+              
+              {transactionToEdit.paymentStatus !== PAYMENT_STATUS.PARTIAL && (
+                <div className="space-y-2">
+                  <Label>Partial Payment Amount (₱)</Label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    max={transactionToEdit.originalAmount || transactionToEdit.amount || 0}
+                    step="0.01"
+                    value={partialAmount}
+                    onChange={(e) => setPartialAmount(e.target.value)}
+                    placeholder="Enter partial payment amount"
+                    disabled={loading}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter the amount paid for partial payment status
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setIsEditStatusDialogOpen(false);
+              setPartialAmount("");
+            }}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 
