@@ -13,6 +13,8 @@ import Transactions from './pages/Transactions';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Reservations from './pages/Reservations';
+import Reorder from './pages/Reorder';
+import Distributor from './pages/Distributor';
 
 function App() {
   return (
@@ -46,6 +48,7 @@ function App() {
         />
         <Routes>
           {/* Public routes */}
+          <Route path="/" element={<Navigate to="/dashboard" />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           
@@ -55,8 +58,10 @@ function App() {
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/products" element={<Products />} />
               <Route path="/transactions" element={<Transactions />} />
-              <Route path="/reports" element={<Reports />} />
               <Route path="/reservations" element={<Reservations />} />
+              <Route path="/reorder" element={<Reorder />} />
+              <Route path="/distributor" element={<Distributor />} />
+              <Route path="/reports" element={<Reports />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
           </Route>

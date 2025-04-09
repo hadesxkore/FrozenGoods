@@ -16,7 +16,11 @@ import {
   X,
   ChevronRight,
   Snowflake,
-  BookmarkIcon
+  BookmarkIcon,
+  FileText,
+  Calendar,
+  BarChart2,
+  DollarSign
 } from "lucide-react";
 
 export default function Sidebar({ onStateChange }) {
@@ -87,12 +91,22 @@ export default function Sidebar({ onStateChange }) {
     },
     {
       title: "Reservations",
-      icon: <BookmarkIcon className="h-5 w-5" />,
+      icon: <Calendar className="h-5 w-5" />,
       path: "/reservations",
     },
     {
+      title: "Reorder",
+      icon: <Package className="h-5 w-5" />,
+      path: "/reorder",
+    },
+    {
+      title: "Distributor",
+      icon: <DollarSign className="h-5 w-5" />,
+      path: "/distributor",
+    },
+    {
       title: "Reports",
-      icon: <BarChart className="h-5 w-5" />,
+      icon: <BarChart2 className="h-5 w-5" />,
       path: "/reports",
     },
     {
