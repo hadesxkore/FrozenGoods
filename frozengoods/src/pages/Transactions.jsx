@@ -111,6 +111,8 @@ export default function Transactions() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
+  const [selectedTransactions, setSelectedTransactions] = useState([]);
+  const [isBulkDeleteDialogOpen, setIsBulkDeleteDialogOpen] = useState(false);
   const [formData, setFormData] = useState({
     productId: "",
     quantity: "1",
@@ -894,6 +896,93 @@ export default function Transactions() {
     setIsEditStatusDialogOpen(true);
   };
 
+  // Handle bulk delete
+  const handleBulkDelete = async () => {
+    if (selectedTransactions.length === 0) {
+      toast.error("Please select transactions to delete");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      // Delete each selected transaction
+      for (const transactionId of selectedTransactions) {
+        const transaction = transactions.find(t => t.id === transactionId);
+        if (transaction) {
+          await deleteDoc(doc(db, "transactions", transactionId));
+          
+          // If it's a sale transaction, restore inventory
+          if (transaction.type === TRANSACTION_TYPES.SALE) {
+            const productRef = doc(db, "products", transaction.productId);
+            const productDoc = await getDoc(productRef);
+            
+            if (productDoc.exists()) {
+              const currentQuantity = productDoc.data().quantity || 0;
+              await updateDoc(productRef, {
+                quantity: currentQuantity + transaction.quantity
+              });
+            }
+          }
+        }
+      }
+      
+      // Refresh transactions list
+      const transactionsQuery = query(
+        collection(db, "transactions"),
+        orderBy("date", "desc")
+      );
+      const transactionsSnapshot = await getDocs(transactionsQuery);
+      const transactionsData = transactionsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        date: doc.data().date?.toDate() || new Date()
+      }));
+      setTransactions(transactionsData);
+      
+      // Clear selection
+      setSelectedTransactions([]);
+      setIsBulkDeleteDialogOpen(false);
+      
+      toast.success(`Successfully deleted ${selectedTransactions.length} transaction(s)`);
+    } catch (error) {
+      console.error("Error deleting transactions:", error);
+      toast.error("Failed to delete transactions");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Toggle transaction selection
+  const toggleTransactionSelection = (transactionId) => {
+    setSelectedTransactions(prev => {
+      if (prev.includes(transactionId)) {
+        return prev.filter(id => id !== transactionId);
+      } else {
+        return [...prev, transactionId];
+      }
+    });
+  };
+
+  // Select all transactions on current page
+  const selectAllOnPage = (transactions) => {
+    const currentPageIds = transactions.map(t => t.id);
+    setSelectedTransactions(prev => {
+      const allSelected = currentPageIds.every(id => prev.includes(id));
+      if (allSelected) {
+        return prev.filter(id => !currentPageIds.includes(id));
+      } else {
+        const newSelection = [...prev];
+        currentPageIds.forEach(id => {
+          if (!newSelection.includes(id)) {
+            newSelection.push(id);
+          }
+        });
+        return newSelection;
+      }
+    });
+  };
+
   // Render sales transactions table
   const renderSalesTable = () => {
     return (
@@ -935,165 +1024,19 @@ export default function Transactions() {
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
                 <SelectItem value={PAYMENT_STATUS.PAID}>Paid</SelectItem>
-                <SelectItem value={PAYMENT_STATUS.PARTIAL}>Partially Paid</SelectItem>
                 <SelectItem value={PAYMENT_STATUS.UNPAID}>Unpaid</SelectItem>
+                <SelectItem value={PAYMENT_STATUS.PARTIAL}>Partially Paid</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" onClick={handlePrintSales}>
-              <Printer className="mr-2 h-4 w-4" />
-              Print Sales
-            </Button>
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="mr-2 h-4 w-4" />
-                  New Sale
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[500px]">
-                <DialogHeader>
-                  <DialogTitle>Record New Sale</DialogTitle>
-                </DialogHeader>
-                <form onSubmit={handleSubmit} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Product</Label>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className="w-full justify-between"
-                          disabled={loading}
-                        >
-                          {selectedProduct ? (
-                            <div className="flex items-center gap-2">
-                              <span>{selectedProduct.name}</span>
-                              <Badge variant="outline">
-                                ₱{selectedProduct.price.toFixed(2)}
-                              </Badge>
-                              <Badge variant={selectedProduct.quantity < 10 ? "destructive" : "secondary"}>
-                                {selectedProduct.quantity} in stock
-                              </Badge>
-                            </div>
-                          ) : (
-                            "Select a product"
-                          )}
-                          <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)]">
-                        <div className="p-2">
-                          <div className="relative">
-                            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                              placeholder="Search products..."
-                              value={searchTerm}
-                              onChange={(e) => setSearchTerm(e.target.value)}
-                              className="pl-8"
-                            />
-                          </div>
-                        </div>
-                        <DropdownMenuSeparator />
-                        <ScrollArea className="h-[300px]">
-                          {filteredProducts.length > 0 ? (
-                            filteredProducts.map((product) => (
-                              <DropdownMenuItem
-                                key={product.id}
-                                onSelect={() => {
-                                  setSelectedProduct(product);
-                                  setSearchTerm("");
-                                }}
-                                disabled={product.quantity <= 0}
-                                className="p-3"
-                              >
-                                <div className="flex flex-col gap-1">
-                                  <div className="font-medium">{product.name}</div>
-                                  <div className="flex items-center gap-2 text-sm">
-                                    <Badge variant="outline">
-                                      ₱{product.price.toFixed(2)}
-                                    </Badge>
-                                    <Badge variant={product.quantity < 10 ? "destructive" : "secondary"}>
-                                      {product.quantity} in stock
-                                    </Badge>
-                                  </div>
-                                </div>
-                              </DropdownMenuItem>
-                            ))
-                          ) : (
-                            <div className="p-4 text-center text-sm text-muted-foreground">
-                              No products found
-                            </div>
-                          )}
-                        </ScrollArea>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="quantity">Quantity</Label>
-                    <Input
-                      id="quantity"
-                      type="number"
-                      min="1"
-                      max={selectedProduct?.quantity || 1}
-                      value={quantity}
-                      onChange={(e) => setQuantity(e.target.value)}
-                      required
-                      disabled={!selectedProduct || loading}
-                    />
-                    {selectedProduct && (
-                      <div className="text-sm text-muted-foreground">
-                        Total Amount: ₱{((selectedProduct.price || 0) * (parseInt(quantity) || 0)).toFixed(2)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Payment Method</Label>
-                    <Select
-                      value={paymentMethod}
-                      onValueChange={setPaymentMethod}
-                      required
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select payment method" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={PAYMENT_METHODS.CASH} className="text-gray-800">Cash</SelectItem>
-                        <SelectItem value={PAYMENT_METHODS.GCASH} className="text-blue-800">GCash</SelectItem>
-                        <SelectItem value={PAYMENT_METHODS.PAYMAYA} className="text-green-800">PayMaya</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="notes">Notes (Optional)</Label>
-                    <Input
-                      id="notes"
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      placeholder="Add any additional notes"
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <DialogFooter>
-                    <Button
-                      type="submit"
-                      disabled={!selectedProduct || !quantity || !paymentMethod || loading}
-                    >
-                      {loading ? (
-                        <>
-                          <RotateCw className="mr-2 h-4 w-4 animate-spin" />
-                          Recording...
-                        </>
-                      ) : (
-                        "Record Sale"
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
+            {selectedTransactions.length > 0 && (
+              <Button
+                variant="destructive"
+                onClick={() => setIsBulkDeleteDialogOpen(true)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Selected ({selectedTransactions.length})
+              </Button>
+            )}
           </div>
         </div>
         
@@ -1102,6 +1045,9 @@ export default function Transactions() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[50px]">
+                    <input type="checkbox" disabled />
+                  </TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Product</TableHead>
                   <TableHead>User</TableHead>
@@ -1116,6 +1062,7 @@ export default function Transactions() {
               <TableBody>
                 {[...Array(5)].map((_, index) => (
                   <TableRow key={index}>
+                    <TableCell><Skeleton className="h-4 w-4" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-28" /></TableCell>
@@ -1134,6 +1081,13 @@ export default function Transactions() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[50px]">
+                    <input
+                      type="checkbox"
+                      checked={paginatedSalesTransactions.every(t => selectedTransactions.includes(t.id))}
+                      onChange={() => selectAllOnPage(paginatedSalesTransactions)}
+                    />
+                  </TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Product</TableHead>
                   <TableHead>User</TableHead>
@@ -1148,6 +1102,13 @@ export default function Transactions() {
               <TableBody>
                 {paginatedSalesTransactions.map((transaction) => (
                   <TableRow key={transaction.id}>
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        checked={selectedTransactions.includes(transaction.id)}
+                        onChange={() => toggleTransactionSelection(transaction.id)}
+                      />
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Calendar className="h-4 w-4 text-muted-foreground" />
@@ -1323,6 +1284,15 @@ export default function Transactions() {
                 </option>
               ))}
             </select>
+            {selectedTransactions.length > 0 && (
+              <Button
+                variant="destructive"
+                onClick={() => setIsBulkDeleteDialogOpen(true)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Selected ({selectedTransactions.length})
+              </Button>
+            )}
           </div>
         </div>
         
@@ -1331,6 +1301,9 @@ export default function Transactions() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[50px]">
+                    <input type="checkbox" disabled />
+                  </TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Product</TableHead>
@@ -1343,6 +1316,7 @@ export default function Transactions() {
               <TableBody>
                 {[...Array(5)].map((_, index) => (
                   <TableRow key={index}>
+                    <TableCell><Skeleton className="h-4 w-4" /></TableCell>
                     <TableCell><Skeleton className="h-8 w-28" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-32" /></TableCell>
@@ -1360,6 +1334,13 @@ export default function Transactions() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-[50px]">
+                        <input
+                          type="checkbox"
+                          checked={paginatedInventoryTransactions.every(t => selectedTransactions.includes(t.id))}
+                          onChange={() => selectAllOnPage(paginatedInventoryTransactions)}
+                        />
+                      </TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Product</TableHead>
@@ -1374,6 +1355,13 @@ export default function Transactions() {
                       const typeInfo = getTransactionTypeDisplay(transaction.type);
                       return (
                         <TableRow key={transaction.id}>
+                          <TableCell>
+                            <input
+                              type="checkbox"
+                              checked={selectedTransactions.includes(transaction.id)}
+                              onChange={() => toggleTransactionSelection(transaction.id)}
+                            />
+                          </TableCell>
                           <TableCell>
                             <Badge className={`flex w-fit items-center gap-1 ${typeInfo.color}`}>
                               {typeInfo.icon}
@@ -1709,6 +1697,27 @@ export default function Transactions() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <AlertDialog open={isBulkDeleteDialogOpen} onOpenChange={setIsBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete {selectedTransactions.length} selected transaction(s).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={handleBulkDelete}
+            >
+              Delete Selected
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 } 
