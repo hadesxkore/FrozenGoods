@@ -102,6 +102,12 @@ export default function Reorder() {
   const [listToDelete, setListToDelete] = useState(null);
   const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
   const [lastDeletedList, setLastDeletedList] = useState(null);
+  const [selectedItemsToAdd, setSelectedItemsToAdd] = useState([]);
+  const [isAddItemsDialogOpen, setIsAddItemsDialogOpen] = useState(false);
+  const [isAddProductsDialogOpen, setIsAddProductsDialogOpen] = useState(false);
+  const [selectedProducts, setSelectedProducts] = useState([]);
+  const [productSearchTerm, setProductSearchTerm] = useState("");
+  const [productQuantities, setProductQuantities] = useState({});
 
   // Fetch products, reorder items, and saved reorder lists
   useEffect(() => {
@@ -671,6 +677,140 @@ export default function Reorder() {
     }, 0);
   };
 
+  // Toggle item selection for adding to current list
+  const toggleItemSelection = (itemId) => {
+    setSelectedItemsToAdd(prev => {
+      if (prev.includes(itemId)) {
+        return prev.filter(id => id !== itemId);
+      } else {
+        return [...prev, itemId];
+      }
+    });
+  };
+
+  // Select all items for adding to current list
+  const selectAllItems = (items) => {
+    const allSelected = items.every(item => selectedItemsToAdd.includes(item.id));
+    if (allSelected) {
+      setSelectedItemsToAdd([]);
+    } else {
+      setSelectedItemsToAdd(items.map(item => item.id));
+    }
+  };
+
+  // Add selected items to current list
+  const addSelectedItemsToCurrentList = () => {
+    if (selectedItemsToAdd.length === 0) {
+      toast.error("Please select at least one item to add");
+      return;
+    }
+
+    const currentItems = [...reorderItems];
+    const itemsToAdd = selectedSavedList.items.filter(item => selectedItemsToAdd.includes(item.id));
+    const newItems = itemsToAdd.map(item => ({
+      ...item,
+      id: crypto.randomUUID() // Generate new ID for each item
+    }));
+    
+    // Check if adding these items would exceed max amount
+    const currentTotal = calculateTotalCost();
+    const newItemsTotal = newItems.reduce((sum, item) => {
+      const product = products.find(p => p.id === item.productId);
+      return sum + ((product?.distributorPrice || 0) * item.quantity);
+    }, 0);
+    
+    if (currentTotal + newItemsTotal > maxTotalAmount) {
+      toast.error("Adding these items would exceed the maximum total amount");
+      return;
+    }
+    
+    setReorderItems([...currentItems, ...newItems]);
+    setIsReorderListHidden(false);
+    setActiveTab("reorder");
+    setIsAddItemsDialogOpen(false);
+    setIsViewSavedListDialogOpen(false);
+    setSelectedItemsToAdd([]);
+    toast.success(`${newItems.length} item(s) added to current reorder list`);
+  };
+
+  // Toggle product selection for adding to reorder list
+  const toggleProductSelection = (productId) => {
+    setSelectedProducts(prev => {
+      if (prev.includes(productId)) {
+        return prev.filter(id => id !== productId);
+      } else {
+        return [...prev, productId];
+      }
+    });
+  };
+
+  // Select all products for adding to reorder list
+  const selectAllProducts = (products) => {
+    const allSelected = products.every(product => selectedProducts.includes(product.id));
+    if (allSelected) {
+      setSelectedProducts([]);
+    } else {
+      setSelectedProducts(products.map(product => product.id));
+    }
+  };
+
+  // Handle quantity change for a product
+  const handleProductQuantityChange = (productId, value) => {
+    setProductQuantities(prev => ({
+      ...prev,
+      [productId]: value
+    }));
+  };
+
+  // Add selected products to reorder list
+  const addSelectedProductsToReorderList = () => {
+    if (selectedProducts.length === 0) {
+      toast.error("Please select at least one product to add");
+      return;
+    }
+
+    const currentItems = [...reorderItems];
+    const newItems = selectedProducts.map(productId => {
+      const product = products.find(p => p.id === productId);
+      const quantity = parseInt(productQuantities[productId]) || 1;
+      return {
+        id: crypto.randomUUID(),
+        productId: product.id,
+        productName: product.name,
+        quantity: quantity,
+        notes: "",
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.uid,
+        status: "active"
+      };
+    });
+    
+    // Check if adding these items would exceed max amount
+    const currentTotal = calculateTotalCost();
+    const newItemsTotal = newItems.reduce((sum, item) => {
+      const product = products.find(p => p.id === item.productId);
+      return sum + ((product?.distributorPrice || 0) * item.quantity);
+    }, 0);
+    
+    if (currentTotal + newItemsTotal > maxTotalAmount) {
+      toast.error("Adding these items would exceed the maximum total amount");
+      return;
+    }
+    
+    setReorderItems([...currentItems, ...newItems]);
+    setIsReorderListHidden(false);
+    setActiveTab("reorder");
+    setIsAddProductsDialogOpen(false);
+    setSelectedProducts([]);
+    setProductQuantities({});
+    toast.success(`${newItems.length} product(s) added to reorder list`);
+  };
+
+  // Filter products based on search term
+  const filteredProductsForSelection = products.filter(product =>
+    product.name.toLowerCase().includes(productSearchTerm.toLowerCase())
+  );
+
   // Render products table
   const renderProductsTable = () => {
     if (loading) {
@@ -881,10 +1021,16 @@ export default function Reorder() {
           <p className="text-sm text-muted-foreground mb-4">
             Add a reorder item to get started.
           </p>
-          <Button onClick={() => setIsDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Reorder Item
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={() => setIsAddProductsDialogOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Products
+            </Button>
+            <Button onClick={() => setIsDialogOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Single Item
+            </Button>
+          </div>
         </div>
       );
     }
@@ -892,6 +1038,10 @@ export default function Reorder() {
     return (
       <div className="space-y-4">
         <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setIsAddProductsDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add More Products
+          </Button>
           <Button variant="outline" onClick={handlePrintReorderList}>
             <Printer className="mr-2 h-4 w-4" />
             Print to PDF
@@ -1095,66 +1245,150 @@ export default function Reorder() {
                 Add Reorder Item
               </Button>
             </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add Reorder Item</DialogTitle>
-                <DialogDescription>
+            <DialogContent className="max-w-xl">
+              <DialogHeader className="border-b pb-4">
+                <DialogTitle className="text-xl font-semibold">Add Reorder Item</DialogTitle>
+                <DialogDescription className="text-sm">
                   Add a product to your reorder list.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleSubmit}>
-                <div className="grid gap-4 py-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="productId">Product</Label>
-                    <select
-                      id="productId"
-                      name="productId"
-                      value={formData.productId}
-                      onChange={handleInputChange}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                      required
-                    >
-                      <option value="">Select a product</option>
-                      {products.map(product => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                        </option>
-                      ))}
-                    </select>
+                <div className="mt-6 space-y-6">
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="productId" className="text-sm font-medium">Select Product</Label>
+                      <select
+                        id="productId"
+                        name="productId"
+                        value={formData.productId}
+                        onChange={handleInputChange}
+                        className="mt-2 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        required
+                      >
+                        <option value="">Choose a product</option>
+                        {products.map(product => {
+                          const distributorPrice = product.distributorPrice ? `₱${product.distributorPrice.toFixed(2)}` : 'No price set';
+                          return (
+                            <option key={product.id} value={product.id}>
+                              {product.name} - Stock: {product.quantity} - {distributorPrice}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    {formData.productId && (
+                      <div className="rounded-lg border bg-card p-4">
+                        {(() => {
+                          const selectedProduct = products.find(p => p.id === formData.productId);
+                          if (!selectedProduct) return null;
+                          return (
+                            <div className="space-y-3">
+                              <div className="flex items-start gap-3">
+                                {selectedProduct.imageUrl ? (
+                                  <div className="relative h-16 w-16 overflow-hidden rounded-md border bg-muted flex-shrink-0">
+                                    <img 
+                                      src={selectedProduct.imageUrl} 
+                                      alt={selectedProduct.name}
+                                      className="h-full w-full object-cover" 
+                                    />
+                                  </div>
+                                ) : (
+                                  <div className="flex h-16 w-16 items-center justify-center rounded-md border bg-muted flex-shrink-0">
+                                    <Package className="h-6 w-6 text-muted-foreground" />
+                                  </div>
+                                )}
+                                <div className="flex-1">
+                                  <h3 className="font-medium">{selectedProduct.name}</h3>
+                                  <p className="text-sm text-muted-foreground">{selectedProduct.category || "Uncategorized"}</p>
+                                </div>
+                                <Badge 
+                                  variant={selectedProduct.quantity <= 5 ? "destructive" : "secondary"}
+                                  className="flex-shrink-0"
+                                >
+                                  Stock: {selectedProduct.quantity}
+                                </Badge>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 gap-4 border-t pt-3">
+                                <div>
+                                  <div className="text-xs text-muted-foreground">Your Price</div>
+                                  <div className="font-medium text-green-600">₱{selectedProduct.price?.toFixed(2) || "0.00"}</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-muted-foreground">Distributor Price</div>
+                                  <div className="font-medium text-blue-600">₱{selectedProduct.distributorPrice?.toFixed(2) || "Not set"}</div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    <div>
+                      <Label htmlFor="quantity" className="text-sm font-medium">Quantity to Order</Label>
+                      <Input
+                        id="quantity"
+                        name="quantity"
+                        type="number"
+                        min="1"
+                        placeholder="Enter quantity"
+                        value={formData.quantity}
+                        onChange={handleInputChange}
+                        className="mt-2"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="notes" className="text-sm font-medium">Notes (Optional)</Label>
+                      <Input
+                        id="notes"
+                        name="notes"
+                        placeholder="Add any notes about this reorder"
+                        value={formData.notes}
+                        onChange={handleInputChange}
+                        className="mt-2"
+                      />
+                    </div>
                   </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="quantity">Quantity</Label>
-                    <Input
-                      id="quantity"
-                      name="quantity"
-                      type="number"
-                      min="1"
-                      placeholder="Enter quantity"
-                      value={formData.quantity}
-                      onChange={handleInputChange}
-                      required
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="notes">Notes (Optional)</Label>
-                    <Input
-                      id="notes"
-                      name="notes"
-                      placeholder="Add any notes about this reorder"
-                      value={formData.notes}
-                      onChange={handleInputChange}
-                    />
-                  </div>
+
+                  {formData.productId && formData.quantity && (
+                    <div className="rounded-lg border bg-muted/30 p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm text-muted-foreground">Subtotal</div>
+                        <div className="text-lg font-medium">
+                          ₱{(() => {
+                            const product = products.find(p => p.id === formData.productId);
+                            const quantity = parseInt(formData.quantity) || 0;
+                            return ((product?.distributorPrice || 0) * quantity).toFixed(2);
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <DialogFooter>
+
+                <DialogFooter className="mt-6 flex items-center justify-between gap-4 border-t pt-4">
+                  <Button 
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsDialogOpen(false)}
+                  >
+                    Cancel
+                  </Button>
                   <Button type="submit" disabled={loading}>
                     {loading ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Saving...
+                        Adding Item...
                       </>
                     ) : (
-                      "Save"
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add to Reorder List
+                      </>
                     )}
                   </Button>
                 </DialogFooter>
@@ -1362,35 +1596,39 @@ export default function Reorder() {
       {/* View Saved List Dialog */}
       <Dialog open={isViewSavedListDialogOpen} onOpenChange={setIsViewSavedListDialogOpen}>
         <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>{selectedSavedList?.name || "Saved Reorder List"}</DialogTitle>
-            <DialogDescription>
-              Created on {selectedSavedList ? new Date(selectedSavedList.createdAt).toLocaleDateString() : ""}
-            </DialogDescription>
+          <DialogHeader className="border-b pb-4">
+            <DialogTitle className="text-xl font-semibold">{selectedSavedList?.name || "Saved Reorder List"}</DialogTitle>
+            <div className="flex items-center justify-between mt-2">
+              <DialogDescription className="text-sm m-0">
+                Created on {selectedSavedList ? new Date(selectedSavedList.createdAt).toLocaleDateString() : ""}
+              </DialogDescription>
+              <div className="flex items-center gap-4 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Total:</span>
+                  <span className="font-medium text-green-600">₱{selectedSavedList?.totalAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Max:</span>
+                  <span className="font-medium text-blue-600">₱{selectedSavedList?.maxAmount.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
           </DialogHeader>
           
           {selectedSavedList && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div className="text-sm text-muted-foreground">
+              <div className="mt-4">
+                <div className="text-sm text-muted-foreground mb-3">
                   {selectedSavedList.items.length} items in this list
                 </div>
-                <div className="text-sm font-medium">
-                  <span className="text-muted-foreground mr-2">Total:</span>
-                  <span className="text-green-600">₱{selectedSavedList.totalAmount.toFixed(2)}</span>
-                  <span className="text-muted-foreground ml-2">/</span>
-                  <span className="text-muted-foreground ml-2">Max: ₱{selectedSavedList.maxAmount.toFixed(2)}</span>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {selectedSavedList.items.map((item, index) => {
-                  const product = products.find(p => p.id === item.productId);
-                  return (
-                    <div key={index} className="rounded-lg border bg-card text-card-foreground shadow-sm">
-                      <div className="p-3 space-y-2">
+                
+                <div className="grid grid-cols-2 gap-3">
+                  {selectedSavedList.items.map((item, index) => {
+                    const product = products.find(p => p.id === item.productId);
+                    return (
+                      <div key={index} className="flex items-start gap-3 rounded-lg border bg-card p-3">
                         {product?.imageUrl ? (
-                          <div className="relative h-28 w-full overflow-hidden rounded-md border">
+                          <div className="relative h-16 w-16 overflow-hidden rounded-md border bg-muted flex-shrink-0">
                             <img 
                               src={product.imageUrl} 
                               alt={item.productName}
@@ -1398,67 +1636,183 @@ export default function Reorder() {
                             />
                           </div>
                         ) : (
-                          <div className="flex h-28 w-full items-center justify-center rounded-md border bg-muted">
-                            <Package className="h-8 w-8 text-muted-foreground" />
+                          <div className="flex h-16 w-16 items-center justify-center rounded-md border bg-muted flex-shrink-0">
+                            <Package className="h-6 w-6 text-muted-foreground" />
                           </div>
                         )}
-                        <div>
-                          <h3 className="font-semibold text-sm truncate">{item.productName}</h3>
-                          <div className="mt-1 space-y-0.5 text-sm">
-                            <div className="flex justify-between text-xs">
-                              <span className="text-muted-foreground">Quantity:</span>
-                              <span>{item.quantity}</span>
+                        
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <h3 className="font-medium truncate">{item.productName}</h3>
+                            <Badge variant="secondary" className="flex-shrink-0">
+                              {item.quantity} pcs
+                            </Badge>
+                          </div>
+                          
+                          <div className="mt-1 space-y-1 text-sm">
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Distributor:</span>
+                              <span className="font-medium text-blue-600">₱{product?.distributorPrice?.toFixed(2) || "Not set"}</span>
                             </div>
-                            <div className="flex justify-between text-xs">
-                              <span className="text-muted-foreground">Distributor Price:</span>
-                              <span className="text-blue-600">₱{product?.distributorPrice?.toFixed(2) || "Not set"}</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
+                            <div className="flex items-center justify-between">
                               <span className="text-muted-foreground">Subtotal:</span>
                               <span className="font-medium">₱{(item.quantity * (product?.distributorPrice || 0)).toFixed(2)}</span>
                             </div>
                             {item.notes && (
-                              <div className="pt-1">
-                                <span className="text-muted-foreground text-xs">Notes:</span>
-                                <p className="text-xs line-clamp-1 text-muted-foreground">{item.notes}</p>
+                              <div className="text-muted-foreground text-xs mt-1 truncate">
+                                Note: {item.notes}
                               </div>
                             )}
                           </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
 
-              <DialogFooter>
-                <div className="flex justify-between w-full">
-                  <Button 
-                    variant="outline" 
-                    onClick={() => {
-                      handleDeleteSavedList(selectedSavedList.id);
-                      setIsViewSavedListDialogOpen(false);
-                    }}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete List
-                  </Button>
-                  <Button 
-                    onClick={() => {
-                      setReorderItems(selectedSavedList.items);
-                      setIsReorderListHidden(false);
-                      setActiveTab("reorder");
-                      setIsViewSavedListDialogOpen(false);
-                      toast.success("Items added to new reorder list");
-                    }}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Create New List with These Items
-                  </Button>
-                </div>
+              <DialogFooter className="flex items-center justify-between gap-4 border-t pt-4">
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setSelectedItemsToAdd([]);
+                    setIsAddItemsDialogOpen(true);
+                  }}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add to Current List
+                </Button>
+                <Button 
+                  onClick={() => {
+                    setReorderItems(selectedSavedList.items);
+                    setIsReorderListHidden(false);
+                    setActiveTab("reorder");
+                    setIsViewSavedListDialogOpen(false);
+                    toast.success("Items added to new reorder list");
+                  }}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create New List with These Items
+                </Button>
               </DialogFooter>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Items to Current List Dialog */}
+      <Dialog open={isAddItemsDialogOpen} onOpenChange={setIsAddItemsDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Add Products to Current List</DialogTitle>
+            <DialogDescription>
+              Select products from your low stock items to add to your current reorder list.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search products..."
+                  value={productSearchTerm}
+                  onChange={(e) => setProductSearchTerm(e.target.value)}
+                  className="pl-9 pr-4"
+                />
+              </div>
+              <div className="flex items-center gap-4 ml-4">
+                <div className="text-sm text-muted-foreground">
+                  {selectedProducts.length} of {filteredProducts.length} products selected
+                </div>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => selectAllProducts(filteredProducts)}
+                >
+                  Select All
+                </Button>
+              </div>
+            </div>
+            
+            <div className="max-h-[400px] overflow-y-auto space-y-2">
+              {filteredProducts.map((product) => {
+                const isSelected = selectedProducts.includes(product.id);
+                return (
+                  <div 
+                    key={product.id} 
+                    className={`flex items-center gap-3 p-3 rounded-lg border ${
+                      isSelected ? 'border-primary bg-primary/5' : 'bg-card'
+                    }`}
+                  >
+                    <input 
+                      type="checkbox" 
+                      checked={isSelected}
+                      onChange={() => toggleProductSelection(product.id)}
+                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-medium truncate">{product.name}</h4>
+                          <p className="text-sm text-muted-foreground">Category: {product.category || "Uncategorized"}</p>
+                        </div>
+                        <div className="text-sm text-right">
+                          <div>Your Price: <span className="text-green-600">₱{product.price?.toFixed(2) || "0.00"}</span></div>
+                          <div>Distributor Price: <span className="text-blue-600">₱{product.distributorPrice?.toFixed(2) || "Not set"}</span></div>
+                        </div>
+                      </div>
+                      
+                      {isSelected && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <Label htmlFor={`quantity-${product.id}`} className="text-sm">Quantity:</Label>
+                          <Input
+                            id={`quantity-${product.id}`}
+                            type="number"
+                            min="1"
+                            value={productQuantities[product.id] || 1}
+                            onChange={(e) => handleProductQuantityChange(product.id, e.target.value)}
+                            className="w-24 h-8"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              
+              {filteredProducts.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  No products found matching your search.
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="flex items-center justify-between gap-4 border-t pt-4">
+              <div className="text-sm">
+                Selected Items: {selectedProducts.length}
+              </div>
+              <div className="flex gap-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setIsAddItemsDialogOpen(false);
+                    setSelectedProducts([]);
+                    setProductQuantities({});
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={addSelectedProductsToReorderList}
+                  disabled={selectedProducts.length === 0}
+                >
+                  Add Selected Products
+                </Button>
+              </div>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
