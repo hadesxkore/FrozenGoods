@@ -136,6 +136,13 @@ export default function Transactions() {
   const [isEditStatusDialogOpen, setIsEditStatusDialogOpen] = useState(false);
   const [transactionToEdit, setTransactionToEdit] = useState(null);
   const [partialAmount, setPartialAmount] = useState("");
+  const [isNewSaleDialogOpen, setIsNewSaleDialogOpen] = useState(false);
+  const [newSaleData, setNewSaleData] = useState({
+    productId: "",
+    quantity: "",
+    paymentMethod: "",
+    notes: ""
+  });
 
   // Payment method options
   const PAYMENT_METHODS = {
@@ -1000,6 +1007,10 @@ export default function Transactions() {
             />
           </div>
           <div className="flex gap-2">
+            <Button onClick={() => setIsNewSaleDialogOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Sale
+            </Button>
             <Select
               value={paymentMethodFilter}
               onValueChange={setPaymentMethodFilter}
@@ -1463,6 +1474,88 @@ export default function Transactions() {
     );
   };
 
+  const handleNewSale = async () => {
+    if (!newSaleData.productId || !newSaleData.quantity || !newSaleData.paymentMethod) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+
+    const quantityNum = parseInt(newSaleData.quantity);
+    if (isNaN(quantityNum) || quantityNum <= 0) {
+      toast.error("Please enter a valid quantity");
+      return;
+    }
+
+    const selectedProduct = products.find(p => p.id === newSaleData.productId);
+    if (!selectedProduct) {
+      toast.error("Selected product not found");
+      return;
+    }
+
+    if (selectedProduct.quantity < quantityNum) {
+      toast.error(`Not enough inventory. Only ${selectedProduct.quantity} units available.`);
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // Create transaction data
+      const transactionData = {
+        type: TRANSACTION_TYPES.SALE,
+        productId: selectedProduct.id,
+        productName: selectedProduct.name,
+        quantity: quantityNum,
+        amount: selectedProduct.price * quantityNum,
+        paymentMethod: newSaleData.paymentMethod,
+        paymentStatus: PAYMENT_STATUS.PAID,
+        notes: newSaleData.notes,
+        userName: currentUser?.name || currentUser?.email || "Unknown User",
+        userId: currentUser?.uid || "unknown",
+        date: serverTimestamp()
+      };
+
+      // Add transaction to Firestore
+      const docRef = await addDoc(collection(db, "transactions"), transactionData);
+
+      // Update product quantity in inventory
+      const productRef = doc(db, "products", selectedProduct.id);
+      await updateDoc(productRef, {
+        quantity: selectedProduct.quantity - quantityNum
+      });
+
+      // Update local states
+      const newTransaction = {
+        id: docRef.id,
+        ...transactionData,
+        date: new Date()
+      };
+
+      setTransactions(prev => [newTransaction, ...prev]);
+      setProducts(prev => prev.map(product => 
+        product.id === selectedProduct.id 
+          ? { ...product, quantity: product.quantity - quantityNum }
+          : product
+      ));
+
+      toast.success(`Sale of ${quantityNum} ${selectedProduct.name} recorded successfully`);
+
+      // Reset form and close dialog
+      setNewSaleData({
+        productId: "",
+        quantity: "",
+        paymentMethod: "",
+        notes: ""
+      });
+      setIsNewSaleDialogOpen(false);
+    } catch (error) {
+      console.error("Error recording sale:", error);
+      toast.error("Failed to record sale");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <div>
@@ -1718,6 +1811,139 @@ export default function Transactions() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* New Sale Dialog */}
+      <Dialog open={isNewSaleDialogOpen} onOpenChange={setIsNewSaleDialogOpen}>
+        <DialogContent className="sm:max-w-[500px] p-0 overflow-hidden">
+          <div className="bg-gradient-to-r from-blue-600 to-blue-800 p-6 text-white">
+            <DialogHeader>
+              <DialogTitle className="text-2xl font-bold">Record New Sale</DialogTitle>
+              <DialogDescription className="text-blue-100">
+                Add a new sales transaction to your records
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          
+          <div className="p-6 space-y-6">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Product</Label>
+                <Select
+                  value={newSaleData.productId}
+                  onValueChange={(value) => setNewSaleData({ ...newSaleData, productId: value })}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a product" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {products.map((product) => (
+                      <SelectItem key={product.id} value={product.id}>
+                        <div className="flex items-center justify-between w-full">
+                          <span>{product.name}</span>
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <span>₱{product.price}</span>
+                            <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                              {product.quantity} available
+                            </span>
+                          </div>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Quantity</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={newSaleData.quantity}
+                    onChange={(e) => setNewSaleData({ ...newSaleData, quantity: e.target.value })}
+                    placeholder="Enter quantity"
+                    className="w-full"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Payment Method</Label>
+                  <Select
+                    value={newSaleData.paymentMethod}
+                    onValueChange={(value) => setNewSaleData({ ...newSaleData, paymentMethod: value })}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select payment method" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={PAYMENT_METHODS.CASH} className="flex items-center gap-2">
+                        <DollarSign className="h-4 w-4" />
+                        Cash
+                      </SelectItem>
+                      <SelectItem value={PAYMENT_METHODS.GCASH} className="flex items-center gap-2">
+                        <div className="h-4 w-4 bg-blue-500 rounded-full" />
+                        GCash
+                      </SelectItem>
+                      <SelectItem value={PAYMENT_METHODS.PAYMAYA} className="flex items-center gap-2">
+                        <div className="h-4 w-4 bg-purple-500 rounded-full" />
+                        PayMaya
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Notes (Optional)</Label>
+                <Input
+                  value={newSaleData.notes}
+                  onChange={(e) => setNewSaleData({ ...newSaleData, notes: e.target.value })}
+                  placeholder="Add any notes about this sale"
+                  className="w-full"
+                />
+              </div>
+            </div>
+            
+            {newSaleData.productId && newSaleData.quantity && (
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-blue-800">Total Amount</span>
+                  <span className="text-lg font-bold text-blue-900">
+                    ₱{(products.find(p => p.id === newSaleData.productId)?.price * parseInt(newSaleData.quantity) || 0).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <div className="px-6 py-4 bg-gray-50 border-t flex justify-end gap-3">
+            <Button 
+              variant="outline" 
+              onClick={() => setIsNewSaleDialogOpen(false)}
+              className="border-gray-300"
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleNewSale} 
+              disabled={loading}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {loading ? (
+                <div className="flex items-center gap-2">
+                  <RotateCw className="h-4 w-4 animate-spin" />
+                  Recording...
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Plus className="h-4 w-4" />
+                  Record Sale
+                </div>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 

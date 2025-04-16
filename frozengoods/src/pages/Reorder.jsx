@@ -108,6 +108,9 @@ export default function Reorder() {
   const [selectedProducts, setSelectedProducts] = useState([]);
   const [productSearchTerm, setProductSearchTerm] = useState("");
   const [productQuantities, setProductQuantities] = useState({});
+  const [isDeleteItemsModalOpen, setIsDeleteItemsModalOpen] = useState(false);
+  const [itemsToDelete, setItemsToDelete] = useState([]);
+  const [deleteOption, setDeleteOption] = useState("selected");
 
   // Fetch products, reorder items, and saved reorder lists
   useEffect(() => {
@@ -362,16 +365,11 @@ export default function Reorder() {
     try {
       setLoading(true);
       
+      // Delete the specific item from Firestore
       await deleteDoc(doc(db, "reorderItems", itemId));
       
-      // Refresh reorder items
-      const reorderQuery = query(collection(db, "reorderItems"));
-      const reorderSnapshot = await getDocs(reorderQuery);
-      const reorderData = reorderSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setReorderItems(reorderData);
+      // Update the local state by filtering out the deleted item
+      setReorderItems(prevItems => prevItems.filter(item => item.id !== itemId));
       
       toast.success("Reorder item deleted successfully");
     } catch (error) {
@@ -678,7 +676,7 @@ export default function Reorder() {
   };
 
   // Toggle item selection for adding to current list
-  const toggleItemSelection = (itemId) => {
+  const toggleSavedItemSelection = (itemId) => {
     setSelectedItemsToAdd(prev => {
       if (prev.includes(itemId)) {
         return prev.filter(id => id !== itemId);
@@ -699,38 +697,86 @@ export default function Reorder() {
   };
 
   // Add selected items to current list
-  const addSelectedItemsToCurrentList = () => {
+  const addSelectedItemsToCurrentList = async () => {
     if (selectedItemsToAdd.length === 0) {
       toast.error("Please select at least one item to add");
       return;
     }
 
-    const currentItems = [...reorderItems];
-    const itemsToAdd = selectedSavedList.items.filter(item => selectedItemsToAdd.includes(item.id));
-    const newItems = itemsToAdd.map(item => ({
-      ...item,
-      id: crypto.randomUUID() // Generate new ID for each item
-    }));
-    
-    // Check if adding these items would exceed max amount
-    const currentTotal = calculateTotalCost();
-    const newItemsTotal = newItems.reduce((sum, item) => {
-      const product = products.find(p => p.id === item.productId);
-      return sum + ((product?.distributorPrice || 0) * item.quantity);
-    }, 0);
-    
-    if (currentTotal + newItemsTotal > maxTotalAmount) {
-      toast.error("Adding these items would exceed the maximum total amount");
-      return;
+    try {
+      setLoading(true);
+      
+      // Get items from the selected saved list that match the selected IDs
+      const itemsToAdd = selectedSavedList.items.filter(item => 
+        selectedItemsToAdd.includes(item.id || item.productId)
+      );
+      
+      // Find the saved list we want to add items to
+      const targetSavedList = savedReorderLists.find(list => list.id === selectedSavedList.id);
+      
+      if (!targetSavedList) {
+        toast.error("Target saved list not found");
+        return;
+      }
+      
+      // Create new item objects with fresh IDs
+      const newItems = itemsToAdd.map(item => ({
+        ...item,
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.uid,
+        status: "active"
+      }));
+      
+      // Calculate new total amount
+      const newTotalAmount = targetSavedList.items.reduce((sum, item) => {
+        return sum + (item.subtotal || 0);
+      }, 0) + newItems.reduce((sum, item) => {
+        return sum + (item.subtotal || 0);
+      }, 0);
+      
+      // Check if adding these items would exceed max amount
+      if (targetSavedList.maxAmount > 0 && newTotalAmount > targetSavedList.maxAmount) {
+        const excessAmount = newTotalAmount - targetSavedList.maxAmount;
+        toast.error(`Adding these items would exceed the list's maximum amount by ₱${excessAmount.toFixed(2)}`);
+        return;
+      }
+      
+      // Update the saved list with the new items
+      const updatedItems = [...targetSavedList.items, ...newItems];
+      
+      // Update in Firestore
+      await updateDoc(doc(db, "savedReorderLists", targetSavedList.id), {
+        items: updatedItems,
+        totalAmount: newTotalAmount,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.uid
+      });
+      
+      // Refresh saved lists
+      const savedListsQuery = query(collection(db, "savedReorderLists"), orderBy("createdAt", "desc"));
+      const savedListsSnapshot = await getDocs(savedListsQuery);
+      const savedListsData = savedListsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setSavedReorderLists(savedListsData);
+      
+      // Update selected saved list
+      const updatedSelectedList = savedListsData.find(list => list.id === selectedSavedList.id);
+      setSelectedSavedList(updatedSelectedList);
+      
+      // Close dialogs and reset selected items
+      setIsAddItemsDialogOpen(false);
+      setSelectedItemsToAdd([]);
+      
+      toast.success(`${newItems.length} item(s) added to "${targetSavedList.name}" list`);
+    } catch (error) {
+      console.error("Error adding items to saved list:", error);
+      toast.error("Failed to add items to saved list");
+    } finally {
+      setLoading(false);
     }
-    
-    setReorderItems([...currentItems, ...newItems]);
-    setIsReorderListHidden(false);
-    setActiveTab("reorder");
-    setIsAddItemsDialogOpen(false);
-    setIsViewSavedListDialogOpen(false);
-    setSelectedItemsToAdd([]);
-    toast.success(`${newItems.length} item(s) added to current reorder list`);
   };
 
   // Toggle product selection for adding to reorder list
@@ -763,37 +809,47 @@ export default function Reorder() {
   };
 
   // Add selected products to reorder list
-  const addSelectedProductsToReorderList = () => {
-    if (selectedProducts.length === 0) {
-      toast.error("Please select at least one product to add");
-      return;
+  const addSelectedProductsToReorderList = (newItems = []) => {
+    if (newItems.length === 0) {
+      if (selectedProducts.length === 0) {
+        toast.error("Please select at least one product to add");
+        return;
+      }
+  
+      newItems = selectedProducts.map(productId => {
+        const product = products.find(p => p.id === productId);
+        const quantity = parseInt(productQuantities[productId]) || 1;
+        const price = product?.price || 0;
+        const distributorPrice = product?.distributorPrice || 0;
+        const subtotal = quantity * distributorPrice;
+        
+        return {
+          id: crypto.randomUUID(),
+          productId: product.id,
+          productName: product.name,
+          quantity: quantity,
+          yourPrice: price,
+          distributorPrice: distributorPrice,
+          subtotal: subtotal,
+          notes: "",
+          createdAt: new Date().toISOString(),
+          createdBy: currentUser.uid,
+          status: "active"
+        };
+      });
     }
-
-    const currentItems = [...reorderItems];
-    const newItems = selectedProducts.map(productId => {
-      const product = products.find(p => p.id === productId);
-      const quantity = parseInt(productQuantities[productId]) || 1;
-      return {
-        id: crypto.randomUUID(),
-        productId: product.id,
-        productName: product.name,
-        quantity: quantity,
-        notes: "",
-        createdAt: new Date().toISOString(),
-        createdBy: currentUser.uid,
-        status: "active"
-      };
-    });
     
     // Check if adding these items would exceed max amount
+    const currentItems = [...reorderItems];
     const currentTotal = calculateTotalCost();
     const newItemsTotal = newItems.reduce((sum, item) => {
-      const product = products.find(p => p.id === item.productId);
-      return sum + ((product?.distributorPrice || 0) * item.quantity);
+      return sum + (item.subtotal || 0);
     }, 0);
     
-    if (currentTotal + newItemsTotal > maxTotalAmount) {
-      toast.error("Adding these items would exceed the maximum total amount");
+    if (maxTotalAmount > 0 && currentTotal + newItemsTotal > maxTotalAmount) {
+      // Calculate how much it will exceed by
+      const excessAmount = (currentTotal + newItemsTotal) - maxTotalAmount;
+      toast.error(`Adding these items would exceed the maximum total amount by ₱${excessAmount.toFixed(2)}. Current total: ₱${currentTotal.toFixed(2)}, New items total: ₱${newItemsTotal.toFixed(2)}, Max allowed: ₱${maxTotalAmount.toFixed(2)}`);
       return;
     }
     
@@ -801,6 +857,7 @@ export default function Reorder() {
     setIsReorderListHidden(false);
     setActiveTab("reorder");
     setIsAddProductsDialogOpen(false);
+    setIsAddItemsDialogOpen(false);
     setSelectedProducts([]);
     setProductQuantities({});
     toast.success(`${newItems.length} product(s) added to reorder list`);
@@ -1224,6 +1281,110 @@ export default function Reorder() {
     );
   };
 
+  // Add new function to handle the deletion of specific items from a saved list
+  const handleDeleteSelectedItems = async () => {
+    if (deleteOption === "selected" && itemsToDelete.length === 0) {
+      toast.error("Please select at least one item to delete");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Create a copy of the saved list
+      const updatedList = { ...selectedSavedList };
+      
+      if (deleteOption === "selected") {
+        // Remove selected items
+        updatedList.items = updatedList.items.filter(item => !itemsToDelete.includes(item.id || item.productId));
+      } else if (deleteOption === "all") {
+        // Clear all items
+        updatedList.items = [];
+      }
+      
+      // Recalculate total amount
+      const newTotalAmount = updatedList.items.reduce((sum, item) => {
+        return sum + (item.subtotal || 0);
+      }, 0);
+      
+      updatedList.totalAmount = newTotalAmount;
+      
+      // Update the saved list in Firestore
+      await updateDoc(doc(db, "savedReorderLists", selectedSavedList.id), {
+        items: updatedList.items,
+        totalAmount: newTotalAmount,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.uid
+      });
+      
+      // Refresh saved lists
+      const savedListsQuery = query(collection(db, "savedReorderLists"), orderBy("createdAt", "desc"));
+      const savedListsSnapshot = await getDocs(savedListsQuery);
+      const savedListsData = savedListsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setSavedReorderLists(savedListsData);
+      
+      // Update the selected saved list
+      const updatedSelectedList = savedListsData.find(list => list.id === selectedSavedList.id);
+      setSelectedSavedList(updatedSelectedList);
+      
+      // Reset selection state
+      setItemsToDelete([]);
+      setDeleteOption("selected");
+      setIsDeleteItemsModalOpen(false);
+      
+      toast.success(deleteOption === "all" 
+        ? "All items have been removed from the list" 
+        : "Selected items have been removed from the list"
+      );
+    } catch (error) {
+      console.error("Error deleting items:", error);
+      toast.error("Failed to delete items");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Add a function to toggle item selection for deletion
+  const toggleItemDeletionSelection = (itemId) => {
+    setItemsToDelete(prev => {
+      if (prev.includes(itemId)) {
+        return prev.filter(id => id !== itemId);
+      } else {
+        return [...prev, itemId];
+      }
+    });
+  };
+
+  // Add items to reorder list
+  const addItemsToReorderList = (newItems) => {
+    const currentItems = [...reorderItems];
+    
+    // Check if adding these items would exceed max amount
+    const currentTotal = calculateTotalCost();
+    const newItemsTotal = newItems.reduce((sum, item) => {
+      return sum + (item.subtotal || 0);
+    }, 0);
+    
+    if (maxTotalAmount > 0 && currentTotal + newItemsTotal > maxTotalAmount) {
+      // Calculate how much it will exceed by
+      const excessAmount = (currentTotal + newItemsTotal) - maxTotalAmount;
+      toast.error(`Adding these items would exceed the maximum total amount by ₱${excessAmount.toFixed(2)}. Current total: ₱${currentTotal.toFixed(2)}, New items total: ₱${newItemsTotal.toFixed(2)}, Max allowed: ₱${maxTotalAmount.toFixed(2)}`);
+      return;
+    }
+    
+    setReorderItems([...currentItems, ...newItems]);
+    setIsReorderListHidden(false);
+    setActiveTab("reorder");
+    setIsAddProductsDialogOpen(false);
+    setIsAddItemsDialogOpen(false);
+    setSelectedProducts([]);
+    setProductQuantities({});
+    toast.success(`${newItems.length} product(s) added to reorder list`);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1245,7 +1406,7 @@ export default function Reorder() {
                 Add Reorder Item
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-xl">
+            <DialogContent className="max-w-3xl">
               <DialogHeader className="border-b pb-4">
                 <DialogTitle className="text-xl font-semibold">Add Reorder Item</DialogTitle>
                 <DialogDescription className="text-sm">
@@ -1284,7 +1445,7 @@ export default function Reorder() {
                           if (!selectedProduct) return null;
                           return (
                             <div className="space-y-3">
-                              <div className="flex items-start gap-3">
+                              <div className="flex items-start gap-4">
                                 {selectedProduct.imageUrl ? (
                                   <div className="relative h-16 w-16 overflow-hidden rounded-md border bg-muted flex-shrink-0">
                                     <img 
@@ -1310,7 +1471,7 @@ export default function Reorder() {
                                 </Badge>
                               </div>
                               
-                              <div className="grid grid-cols-2 gap-4 border-t pt-3">
+                              <div className="grid grid-cols-3 gap-4 border-t pt-3">
                                 <div>
                                   <div className="text-xs text-muted-foreground">Your Price</div>
                                   <div className="font-medium text-green-600">₱{selectedProduct.price?.toFixed(2) || "0.00"}</div>
@@ -1319,6 +1480,10 @@ export default function Reorder() {
                                   <div className="text-xs text-muted-foreground">Distributor Price</div>
                                   <div className="font-medium text-blue-600">₱{selectedProduct.distributorPrice?.toFixed(2) || "Not set"}</div>
                                 </div>
+                                <div>
+                                  <div className="text-xs text-muted-foreground">Stock Level</div>
+                                  <div className="font-medium text-orange-600">{selectedProduct.quantity} items</div>
+                                </div>
                               </div>
                             </div>
                           );
@@ -1326,31 +1491,33 @@ export default function Reorder() {
                       </div>
                     )}
 
-                    <div>
-                      <Label htmlFor="quantity" className="text-sm font-medium">Quantity to Order</Label>
-                      <Input
-                        id="quantity"
-                        name="quantity"
-                        type="number"
-                        min="1"
-                        placeholder="Enter quantity"
-                        value={formData.quantity}
-                        onChange={handleInputChange}
-                        className="mt-2"
-                        required
-                      />
-                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label htmlFor="quantity" className="text-sm font-medium">Quantity to Order</Label>
+                        <Input
+                          id="quantity"
+                          name="quantity"
+                          type="number"
+                          min="1"
+                          placeholder="Enter quantity"
+                          value={formData.quantity}
+                          onChange={handleInputChange}
+                          className="mt-2"
+                          required
+                        />
+                      </div>
 
-                    <div>
-                      <Label htmlFor="notes" className="text-sm font-medium">Notes (Optional)</Label>
-                      <Input
-                        id="notes"
-                        name="notes"
-                        placeholder="Add any notes about this reorder"
-                        value={formData.notes}
-                        onChange={handleInputChange}
-                        className="mt-2"
-                      />
+                      <div>
+                        <Label htmlFor="notes" className="text-sm font-medium">Notes (Optional)</Label>
+                        <Input
+                          id="notes"
+                          name="notes"
+                          placeholder="Add any notes about this reorder"
+                          value={formData.notes}
+                          onChange={handleInputChange}
+                          className="mt-2"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1593,42 +1760,58 @@ export default function Reorder() {
         </DialogContent>
       </Dialog>
 
-      {/* View Saved List Dialog */}
-      <Dialog open={isViewSavedListDialogOpen} onOpenChange={setIsViewSavedListDialogOpen}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader className="border-b pb-4">
-            <DialogTitle className="text-xl font-semibold">{selectedSavedList?.name || "Saved Reorder List"}</DialogTitle>
-            <div className="flex items-center justify-between mt-2">
-              <DialogDescription className="text-sm m-0">
-                Created on {selectedSavedList ? new Date(selectedSavedList.createdAt).toLocaleDateString() : ""}
-              </DialogDescription>
-              <div className="flex items-center gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Total:</span>
-                  <span className="font-medium text-green-600">₱{selectedSavedList?.totalAmount.toFixed(2)}</span>
+      {/* Custom View Saved List Dialog */}
+      {isViewSavedListDialogOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-[1200px] max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b p-4">
+              <h2 className="text-xl font-bold">{selectedSavedList?.name}</h2>
+              <button 
+                onClick={() => setIsViewSavedListDialogOpen(false)}
+                className="h-8 w-8 rounded-full inline-flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* Info Bar */}
+            <div className="flex items-center justify-between border-b px-6 py-3 bg-gray-50">
+              <div className="flex items-center gap-6">
+                <div>
+                  <span className="text-sm text-gray-500">Created:</span>
+                  <span className="ml-1 text-sm">{selectedSavedList ? new Date(selectedSavedList.createdAt).toLocaleDateString() : ""}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Max:</span>
-                  <span className="font-medium text-blue-600">₱{selectedSavedList?.maxAmount.toFixed(2)}</span>
+                
+                <div>
+                  <span className="text-sm text-gray-500">Items:</span>
+                  <span className="ml-1 text-sm font-medium">{selectedSavedList?.items.length}</span>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-6">
+                <div>
+                  <span className="text-sm text-gray-500">Total:</span>
+                  <span className="ml-1 text-sm font-medium text-green-600">₱{selectedSavedList?.totalAmount.toFixed(2)}</span>
+                </div>
+                
+                <div>
+                  <span className="text-sm text-gray-500">Max:</span>
+                  <span className="ml-1 text-sm font-medium text-blue-600">₱{selectedSavedList?.maxAmount.toFixed(2)}</span>
                 </div>
               </div>
             </div>
-          </DialogHeader>
-          
-          {selectedSavedList && (
-            <div className="space-y-4">
-              <div className="mt-4">
-                <div className="text-sm text-muted-foreground mb-3">
-                  {selectedSavedList.items.length} items in this list
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3">
-                  {selectedSavedList.items.map((item, index) => {
-                    const product = products.find(p => p.id === item.productId);
-                    return (
-                      <div key={index} className="flex items-start gap-3 rounded-lg border bg-card p-3">
+            
+            {/* Content */}
+            <div className="flex-1 overflow-auto p-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {selectedSavedList?.items.map((item, index) => {
+                  const product = products.find(p => p.id === item.productId);
+                  return (
+                    <div key={index} className="flex rounded-md border bg-white p-3 shadow-sm">
+                      <div className="w-16 h-16 mr-3 flex-shrink-0">
                         {product?.imageUrl ? (
-                          <div className="relative h-16 w-16 overflow-hidden rounded-md border bg-muted flex-shrink-0">
+                          <div className="h-16 w-16 overflow-hidden rounded bg-gray-100">
                             <img 
                               src={product.imageUrl} 
                               alt={item.productName}
@@ -1636,53 +1819,94 @@ export default function Reorder() {
                             />
                           </div>
                         ) : (
-                          <div className="flex h-16 w-16 items-center justify-center rounded-md border bg-muted flex-shrink-0">
-                            <Package className="h-6 w-6 text-muted-foreground" />
+                          <div className="h-16 w-16 flex items-center justify-center rounded bg-gray-100">
+                            <Package className="h-6 w-6 text-gray-400" />
                           </div>
                         )}
+                      </div>
+                      
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between">
+                          <h4 className="font-medium text-sm leading-tight line-clamp-2">{item.productName}</h4>
+                          <span className="ml-2 shrink-0 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">
+                            x{item.quantity}
+                          </span>
+                        </div>
                         
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2">
-                            <h3 className="font-medium truncate">{item.productName}</h3>
-                            <Badge variant="secondary" className="flex-shrink-0">
-                              {item.quantity} pcs
-                            </Badge>
+                        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs mt-2">
+                          <div className="flex items-center">
+                            <span className="text-gray-500">Your:</span>
+                            <span className="ml-1 text-green-600 font-medium">₱{item.yourPrice?.toFixed(2) || "0.00"}</span>
                           </div>
-                          
-                          <div className="mt-1 space-y-1 text-sm">
-                            <div className="flex items-center justify-between">
-                              <span className="text-muted-foreground">Distributor:</span>
-                              <span className="font-medium text-blue-600">₱{product?.distributorPrice?.toFixed(2) || "Not set"}</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-muted-foreground">Subtotal:</span>
-                              <span className="font-medium">₱{(item.quantity * (product?.distributorPrice || 0)).toFixed(2)}</span>
-                            </div>
-                            {item.notes && (
-                              <div className="text-muted-foreground text-xs mt-1 truncate">
-                                Note: {item.notes}
-                              </div>
-                            )}
+                          <div className="flex items-center">
+                            <span className="text-gray-500">Dist:</span>
+                            <span className="ml-1 text-blue-600 font-medium">
+                              {product?.distributorPrice ? `₱${product.distributorPrice.toFixed(2)}` : 'Not set'}
+                            </span>
+                          </div>
+                          <div className="flex items-center">
+                            <span className="text-gray-500">Subtotal:</span>
+                            <span className="ml-1 font-medium text-green-600">₱{item.subtotal?.toFixed(2) || "0.00"}</span>
                           </div>
                         </div>
+                        
+                        {item.notes && (
+                          <div className="mt-2 pt-1 border-t text-xs text-gray-500 line-clamp-1">
+                            <span className="font-medium">Note:</span> {item.notes}
+                          </div>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  );
+                })}
               </div>
-
-              <DialogFooter className="flex items-center justify-between gap-4 border-t pt-4">
+            </div>
+            
+            {/* Footer */}
+            <div className="border-t p-4 flex items-center justify-between bg-gray-50">
+              <div className="flex gap-2">
                 <Button 
                   variant="outline" 
+                  size="sm"
+                  onClick={() => {
+                    setListToDelete(selectedSavedList.id);
+                    setIsDeleteAlertOpen(true);
+                  }}
+                  className="gap-2"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete List
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => {
+                    setItemsToDelete([]);
+                    setDeleteOption("selected");
+                    setIsDeleteItemsModalOpen(true);
+                  }}
+                  className="gap-2"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Items
+                </Button>
+              </div>
+              
+              <div className="flex gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm"
                   onClick={() => {
                     setSelectedItemsToAdd([]);
                     setIsAddItemsDialogOpen(true);
                   }}
+                  className="gap-2"
                 >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add to Current List
+                  <Plus className="h-4 w-4" />
+                  Add to This List
                 </Button>
                 <Button 
+                  size="sm"
                   onClick={() => {
                     setReorderItems(selectedSavedList.items);
                     setIsReorderListHidden(false);
@@ -1690,23 +1914,133 @@ export default function Reorder() {
                     setIsViewSavedListDialogOpen(false);
                     toast.success("Items added to new reorder list");
                   }}
+                  className="gap-2"
                 >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Create New List with These Items
+                  <ClipboardList className="h-4 w-4" />
+                  Create New List
                 </Button>
-              </DialogFooter>
+              </div>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Items Modal */}
+      {isDeleteItemsModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between border-b p-4">
+              <h2 className="text-lg font-semibold">Delete Items</h2>
+              <button 
+                onClick={() => setIsDeleteItemsModalOpen(false)}
+                className="h-8 w-8 rounded-full inline-flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <div className="p-4">
+              <div className="mb-4">
+                <h3 className="text-sm font-medium mb-2">Delete Options</h3>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2">
+                    <input 
+                      type="radio" 
+                      name="deleteOption"
+                      value="selected"
+                      checked={deleteOption === "selected"}
+                      onChange={() => setDeleteOption("selected")}
+                      className="h-4 w-4"
+                    />
+                    <span>Delete selected items</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input 
+                      type="radio" 
+                      name="deleteOption"
+                      value="all"
+                      checked={deleteOption === "all"}
+                      onChange={() => setDeleteOption("all")}
+                      className="h-4 w-4"
+                    />
+                    <span>Delete all items</span>
+                  </label>
+                </div>
+              </div>
+              
+              {deleteOption === "selected" && (
+                <div className="mt-4">
+                  <h3 className="text-sm font-medium mb-2">Select items to delete</h3>
+                  <div className="max-h-60 overflow-y-auto border rounded-md">
+                    {selectedSavedList?.items.map((item, index) => (
+                      <div key={index} className="flex items-center gap-3 p-3 border-b last:border-b-0">
+                        <input 
+                          type="checkbox" 
+                          id={`item-${index}`}
+                          checked={itemsToDelete.includes(item.id || item.productId)}
+                          onChange={() => toggleItemDeletionSelection(item.id || item.productId)}
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <label htmlFor={`item-${index}`} className="flex-1 flex items-center gap-2">
+                          <span className="font-medium text-sm truncate">{item.productName}</span>
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                            x{item.quantity}
+                          </span>
+                        </label>
+                        <div className="text-xs text-right">
+                          <span className="text-gray-500">Subtotal:</span>
+                          <span className="ml-1 font-medium text-green-600">₱{item.subtotal?.toFixed(2) || "0.00"}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    {itemsToDelete.length} items selected
+                  </div>
+                </div>
+              )}
+              
+              {deleteOption === "all" && (
+                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
+                  <div className="flex items-center gap-2 text-red-700">
+                    <AlertTriangle className="h-5 w-5 text-red-500" />
+                    <p className="text-sm font-medium">Warning</p>
+                  </div>
+                  <p className="mt-1 text-sm text-red-600">
+                    This will remove all {selectedSavedList?.items.length} items from this list. This action cannot be undone.
+                  </p>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end gap-2 border-t p-4 bg-gray-50">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => setIsDeleteItemsModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                variant="destructive" 
+                size="sm"
+                onClick={handleDeleteSelectedItems}
+                disabled={deleteOption === "selected" && itemsToDelete.length === 0}
+              >
+                {deleteOption === "all" ? "Delete All Items" : "Delete Selected Items"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Items to Current List Dialog */}
       <Dialog open={isAddItemsDialogOpen} onOpenChange={setIsAddItemsDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-5xl">
           <DialogHeader>
-            <DialogTitle>Add Products to Current List</DialogTitle>
+            <DialogTitle>Add Items to "{selectedSavedList?.name}"</DialogTitle>
             <DialogDescription>
-              Select products from your low stock items to add to your current reorder list.
+              Select items from this list to add to your current saved list.
             </DialogDescription>
           </DialogHeader>
           
@@ -1805,7 +2139,39 @@ export default function Reorder() {
                   Cancel
                 </Button>
                 <Button 
-                  onClick={addSelectedProductsToReorderList}
+                  onClick={() => {
+                    // Generate items with subtotal calculation
+                    const newItems = selectedProducts.map(productId => {
+                      const product = products.find(p => p.id === productId);
+                      const quantity = parseInt(productQuantities[productId]) || 1;
+                      const price = product?.price || 0;
+                      const distributorPrice = product?.distributorPrice || 0;
+                      const subtotal = quantity * distributorPrice;
+                      
+                      return {
+                        id: crypto.randomUUID(),
+                        productId: product.id,
+                        productName: product.name,
+                        quantity: quantity,
+                        yourPrice: price,
+                        distributorPrice: distributorPrice,
+                        subtotal: subtotal,
+                        notes: "",
+                        createdAt: new Date().toISOString(),
+                        createdBy: currentUser.uid,
+                        status: "active"
+                      };
+                    });
+                    
+                    // Check if we already have a selectedSavedList open
+                    if (selectedSavedList) {
+                      // Update the saved list with these new items
+                      updateSavedListWithNewItems(newItems);
+                    } else {
+                      // Otherwise add to reorder items
+                      addItemsToReorderList(newItems);
+                    }
+                  }}
                   disabled={selectedProducts.length === 0}
                 >
                   Add Selected Products

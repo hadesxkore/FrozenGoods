@@ -75,7 +75,8 @@ import {
   FileDown,
   ArrowUpDown,
   Calendar,
-  BookmarkIcon
+  BookmarkIcon,
+  DollarSign
 } from "lucide-react";
 import { uploadImageToCloudinary } from "@/utils/cloudinary";
 import { format } from "date-fns";
@@ -96,6 +97,7 @@ export default function Products() {
     description: "",
     category: "",
     price: "",
+    markupPrice: "",
     quantity: "",
     imageFile: null,
     imageUrl: ""
@@ -235,6 +237,7 @@ export default function Products() {
       description: "",
       category: "",
       price: "",
+      markupPrice: "",
       quantity: "",
       imageFile: null,
       imageUrl: ""
@@ -255,7 +258,8 @@ export default function Products() {
       name: product.name || "",
       description: product.description || "",
       category: product.category || "",
-      price: product.price ? String(product.price) : "",
+      price: product.price ? String(product.price) : "", // Use the exact price from the table
+      markupPrice: "", // Clear markup price since we're not using it in edit mode
       quantity: product.quantity ? String(product.quantity) : "",
       imageFile: null,
       imageUrl: product.imageUrl || ""
@@ -279,24 +283,38 @@ export default function Products() {
     setIsReserveDialogOpen(true);
   };
 
+  // Add this function before the handleSubmit function
+  const handlePriceChange = (e) => {
+    const value = e.target.value;
+    const price = parseFloat(value) || 0;
+    const markupPrice = (price * 1.20).toFixed(2); // 20% markup
+    
+    setFormData({
+      ...formData,
+      price: value,
+      markupPrice: markupPrice
+    });
+  };
+
   // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
     
+    if (!formData.name || !formData.category || !formData.price || !formData.quantity) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+
     try {
       setLoading(true);
       
-      // Normalize category (trim whitespace and fix capitalization)
-      const normalizedCategory = formData.category.trim();
-      
-      // Convert price and quantity to numbers
       const productData = {
-        name: formData.name.trim(),
-        description: formData.description.trim(),
-        category: normalizedCategory,
-        price: parseFloat(formData.price),
+        name: formData.name,
+        description: formData.description || "",
+        category: formData.category,
+        price: isEditing ? parseFloat(formData.price) : parseFloat(formData.markupPrice), // Use markup price for new products, direct price for edits
         quantity: parseInt(formData.quantity),
-        imageUrl: formData.imageUrl,
+        imageUrl: formData.imageUrl || "",
         updatedAt: serverTimestamp()
       };
 
@@ -987,18 +1005,30 @@ export default function Products() {
               
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="price">Price (₱)</Label>
-                  <Input
-                    id="price"
-                    name="price"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.price}
-                    onChange={handleChange}
-                    placeholder="0.00"
-                    required
-                  />
+                  <Label htmlFor="price">Base Price</Label>
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="price"
+                      name="price"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.price}
+                      onChange={isEditing ? handleChange : handlePriceChange}
+                      placeholder="Enter base price"
+                      className="pl-9"
+                      required
+                    />
+                  </div>
+                  {!isEditing && formData.price && (
+                    <div className="mt-2 p-2 bg-blue-50 rounded-md border border-blue-100">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-blue-800">Selling Price (20% Markup):</span>
+                        <span className="font-medium text-blue-900">₱{formData.markupPrice}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="quantity">Quantity</Label>
